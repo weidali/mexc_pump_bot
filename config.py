@@ -63,6 +63,28 @@ class Config:
     # Минимальный объём монеты в USDT за 24ч (фильтр совсем мелких)
     MIN_VOLUME_USDT_24H: float = 500_000
 
+    # ── Расписание активности ────────────────────────────────
+    # Часы работы в UTC. Вне этого окна — сканер на паузе.
+    # Pump сканер: активен когда рынок живой (London + NY сессии)
+    # По умолчанию: 07:45–21:15 UTC
+    ACTIVE_HOURS_START: str = field(
+        default_factory=lambda: os.environ.get("ACTIVE_HOURS_START", "07:45")
+    )
+    ACTIVE_HOURS_END: str = field(
+        default_factory=lambda: os.environ.get("ACTIVE_HOURS_END", "21:15")
+    )
+    # BTC стратегия: активна с 04:45 UTC (до формирования 4ч свечи)
+    BTC_ACTIVE_START: str = field(
+        default_factory=lambda: os.environ.get("BTC_ACTIVE_START", "04:45")
+    )
+    BTC_ACTIVE_END: str = field(
+        default_factory=lambda: os.environ.get("BTC_ACTIVE_END", "21:15")
+    )
+    # Включить автопаузу
+    AUTO_SCHEDULE: bool = field(
+        default_factory=lambda: os.environ.get("AUTO_SCHEDULE", "true").lower() == "true"
+    )
+
     # ── База данных — очистка ────────────────────────────────
     # Хранить сигналы не дольше N дней
     DB_KEEP_DAYS: int = field(

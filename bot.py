@@ -20,6 +20,7 @@ from db import Database
 from auth import Auth, require_auth
 from version import __version__, __release_notes__
 from btc_strategy import BTCStrategy, TradeJournal
+from scheduler import Scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +45,8 @@ async def main():
         subscribers_fn=db.get_subscribers,
     )
     await btc.init()
+    scheduler = Scheduler(config=config, bot=bot, get_subscribers=db.get_subscribers)
+    scanner.scheduler = scheduler
 
     # ── /start — лендинг бота ────────────────────────────────
     @dp.message(Command("start"))
@@ -195,6 +198,7 @@ async def main():
             lines.append(f"  💤 Сделок нет")
 
         lines.append(f"  📋 Сетапов сегодня: <b>{btc_setups}</b>")
+        lines.append(scheduler.get_schedule_info())
 
         await message.answer("\n".join(lines), parse_mode="HTML")
 
@@ -497,8 +501,14 @@ async def main():
             parse_mode="HTML"
         )
 
+    async def scheduler_loop():
+        while True:
+            await scheduler.tick(scanner, btc)
+            await asyncio.sleep(60)
+
     asyncio.create_task(scanner.run_forever())
     asyncio.create_task(btc.run_forever())
+    asyncio.create_task(scheduler_loop())
     logger.info("Bot started")
     await dp.start_polling(bot)
 
