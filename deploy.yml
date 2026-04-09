@@ -1,0 +1,49 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            set -e
+
+            # ── 1. Клонируем репо если его ещё нет ──────────
+            if [ ! -d "${{ secrets.DEPLOY_PATH }}" ]; then
+              git clone https://github.com/${{ github.repository }} ${{ secrets.DEPLOY_PATH }}
+            fi
+
+            cd ${{ secrets.DEPLOY_PATH }}
+
+            # ── 2. Подтягиваем изменения ─────────────────────
+            git fetch origin main
+            git reset --hard origin/main
+
+            # ── 3. Создаём/обновляем venv и зависимости ──────
+            python3 -m venv venv
+            ./venv/bin/pip install --quiet --upgrade pip
+            ./venv/bin/pip install --quiet -r requirements.txt
+
+            # ── 4. Пишем .env из GitHub Secrets ──────────────
+            cat > .env << 'ENVEOF'
+            TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
+            MEXC_API_KEY=${{ secrets.MEXC_API_KEY }}
+            MEXC_SECRET=${{ secrets.MEXC_SECRET }}
+            ENVEOF
+
+            # ── 5. Перезапускаем бота (без systemd) ──────────
+            "$DEPLOY_PATH/start.sh"
