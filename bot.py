@@ -151,17 +151,52 @@ async def main():
     @dp.message(Command("status"))
     @require_auth(auth)
     async def cmd_status(message: Message):
-        monitored = scanner.get_monitored_count()
-        signals_24h = await db.get_signals_count_24h()
-        last_scan = scanner.get_last_scan_time()
-        await message.answer(
-            f"📊 <b>Статус сканера</b>\n\n"
-            f"🔍 Монет под наблюдением: <b>{monitored}</b>\n"
-            f"⚡ Сигналов за 24ч: <b>{signals_24h}</b>\n"
-            f"🕐 Последнее сканирование: <b>{last_scan}</b>\n"
-            f"🟢 Статус: {'активен' if scanner.is_running else '⏸ приостановлен'}",
-            parse_mode="HTML"
-        )
+        monitored    = scanner.get_monitored_count()
+        signals_24h  = await db.get_signals_count_24h()
+        last_scan    = scanner.get_last_scan_time()
+
+        # BTC стратегия
+        btc_state    = btc.detector.state.value
+        btc_rng      = btc.detector.ny_range
+        btc_trade    = btc.trade_mgr.active_setup
+        btc_setups   = len(btc.detector.setups_today)
+
+        scanner_icon = "🟢" if scanner.is_running else "⏸"
+        btc_icon     = "🟢" if btc._running else "⏸"
+
+        lines = [
+            f"📊 <b>Статус системы</b>",
+            f"",
+            f"🔀 <b>Pump &amp; Dump сканер:</b>",
+            f"  {scanner_icon} {'Активен' if scanner.is_running else 'Приостановлен'}",
+            f"  🔍 Монет: <b>{monitored}</b>",
+            f"  ⚡ Сигналов за 24ч: <b>{signals_24h}</b>",
+            f"  🕐 Сканирование: <b>{last_scan}</b>",
+            f"",
+            f"📈 <b>BTC стратегия (NY First 4H):</b>",
+            f"  {btc_icon} {'Активна' if btc._running else 'Приостановлена'}",
+            f"  🔄 Состояние: <b>{btc_state}</b>",
+        ]
+
+        if btc_rng:
+            lines.append(
+                f"  📐 Диапазон: <code>${btc_rng.low:,.2f}</code> — "
+                f"<code>${btc_rng.high:,.2f}</code> (${btc_rng.range_size:,.0f})"
+            )
+        else:
+            lines.append(f"  📐 Диапазон: ещё не сформирован")
+
+        if btc_trade:
+            lines.append(
+                f"  🟢 Сделка: {btc_trade.direction.upper()} "
+                f"вход <code>${btc_trade.entry_price:,.2f}</code>"
+            )
+        else:
+            lines.append(f"  💤 Сделок нет")
+
+        lines.append(f"  📋 Сетапов сегодня: <b>{btc_setups}</b>")
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
 
     # ── /top ──────────────────────────────────────────────────
     @dp.message(Command("top"))
