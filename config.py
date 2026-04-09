@@ -63,5 +63,10 @@ class Config:
     # Минимальный объём монеты в USDT за 24ч (фильтр совсем мелких)
     MIN_VOLUME_USDT_24H: float = 500_000
 
+    # ── Авторизация
+    ADMIN_CHAT_ID: int = field(
+        default_factory=lambda: int(os.environ.get("ADMIN_CHAT_ID", "0"))
+    )
+
     # ── БД ────────────────────────────────────────────────────
     DB_PATH: str = "signals.db"

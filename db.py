@@ -1,14 +1,11 @@
 """
 Database — SQLite через aiosqlite.
-Таблицы: signals, subscribers
 """
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 import aiosqlite
-
-from config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +32,24 @@ class Database:
                 )
             """)
             await db.execute("""
-                CREATE INDEX IF NOT EXISTS idx_signals_symbol
-                ON signals(symbol)
+                CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol)
             """)
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS subscribers (
-                    chat_id INTEGER PRIMARY KEY,
-                    added_at TEXT NOT NULL
+                    chat_id     INTEGER PRIMARY KEY,
+                    approved    INTEGER DEFAULT 0,
+                    added_at    TEXT    NOT NULL
                 )
             """)
+            # Миграция: добавляем колонку approved если её нет (для старых БД)
+            try:
+                await db.execute("ALTER TABLE subscribers ADD COLUMN approved INTEGER DEFAULT 0")
+            except Exception:
+                pass
             await db.commit()
         logger.info("Database initialized")
+
+    # ── Signals ───────────────────────────────────────────────
 
     async def save_signal(self, sig) -> int:
         now = datetime.now(timezone.utc).isoformat()
@@ -98,17 +102,40 @@ class Database:
                 rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
-    async def add_subscriber(self, chat_id: int):
+    # ── Subscribers / Auth ────────────────────────────────────
+
+    async def add_subscriber(self, chat_id: int, approved: bool = False):
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
-                "INSERT OR IGNORE INTO subscribers (chat_id, added_at) VALUES (?, ?)",
-                (chat_id, now)
+                """INSERT INTO subscribers (chat_id, approved, added_at)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(chat_id) DO UPDATE SET approved=excluded.approved""",
+                (chat_id, int(approved), now)
             )
             await db.commit()
 
-    async def get_subscribers(self) -> List[int]:
+    async def remove_subscriber(self, chat_id: int) -> bool:
         async with aiosqlite.connect(self.path) as db:
-            async with db.execute("SELECT chat_id FROM subscribers") as cursor:
+            cursor = await db.execute(
+                "DELETE FROM subscribers WHERE chat_id = ?", (chat_id,)
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def is_subscriber(self, chat_id: int) -> bool:
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                "SELECT approved FROM subscribers WHERE chat_id = ?", (chat_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        return bool(row and row[0])
+
+    async def get_subscribers(self) -> List[int]:
+        """Возвращает только одобренных подписчиков."""
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute(
+                "SELECT chat_id FROM subscribers WHERE approved = 1"
+            ) as cursor:
                 rows = await cursor.fetchall()
         return [r[0] for r in rows]
