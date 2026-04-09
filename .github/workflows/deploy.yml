@@ -51,6 +51,7 @@ jobs:
             TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
             MEXC_API_KEY=${{ secrets.MEXC_API_KEY }}
             MEXC_SECRET=${{ secrets.MEXC_SECRET }}
+            ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}
             ENVEOF
 
             # ── 5. Права на скрипты
