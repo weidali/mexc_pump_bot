@@ -63,6 +63,12 @@ class Config:
     # Минимальный объём монеты в USDT за 24ч (фильтр совсем мелких)
     MIN_VOLUME_USDT_24H: float = 500_000
 
+    # ── База данных — очистка ────────────────────────────────
+    # Хранить сигналы не дольше N дней
+    DB_KEEP_DAYS: int = field(
+        default_factory=lambda: int(os.environ.get("DB_KEEP_DAYS", "30"))
+    )
+
     # ── Авторизация
     ADMIN_CHAT_ID: int = field(
         default_factory=lambda: int(os.environ.get("ADMIN_CHAT_ID", "0"))

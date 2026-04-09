@@ -94,6 +94,45 @@ class Database:
                 row = await cursor.fetchone()
         return row[0] if row else 0
 
+    async def cleanup_old_signals(self, keep_days: int = 30) -> int:
+        """Удаляет сигналы старше keep_days дней. Возвращает кол-во удалённых."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
+        async with aiosqlite.connect(self.path) as db:
+            cursor = await db.execute(
+                "DELETE FROM signals WHERE created_at < ?", (cutoff,)
+            )
+            await db.execute("VACUUM")
+            await db.commit()
+            return cursor.rowcount
+
+    async def get_db_stats(self) -> Dict:
+        """Статистика БД для админа."""
+        async with aiosqlite.connect(self.path) as db:
+            async with db.execute("SELECT COUNT(*) FROM signals") as c:
+                total_signals = (await c.fetchone())[0]
+            async with db.execute(
+                "SELECT COUNT(*) FROM signals WHERE created_at >= ?",
+                ((datetime.now(timezone.utc) - timedelta(days=7)).isoformat(),)
+            ) as c:
+                week_signals = (await c.fetchone())[0]
+            async with db.execute(
+                "SELECT MIN(created_at), MAX(created_at) FROM signals"
+            ) as c:
+                row = await c.fetchone()
+                oldest = row[0][:10] if row[0] else "—"
+                newest = row[1][:10] if row[1] else "—"
+
+        import os
+        size_kb = os.path.getsize(self.path) // 1024 if os.path.exists(self.path) else 0
+
+        return {
+            "total_signals": total_signals,
+            "week_signals": week_signals,
+            "oldest": oldest,
+            "newest": newest,
+            "size_kb": size_kb,
+        }
+
     async def get_recent_signals(self, hours: int = 24) -> List[dict]:
         since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         async with aiosqlite.connect(self.path) as db:
@@ -165,3 +204,4 @@ class Database:
             ) as cursor:
                 rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+        

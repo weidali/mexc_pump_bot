@@ -55,7 +55,10 @@ async def main():
                     "👥 <b>Пользователи:</b>\n"
                     "/users — список всех пользователей\n"
                     "/adduser &lt;id&gt; — одобрить пользователя\n"
-                    "/removeuser &lt;id&gt; — удалить пользователя",
+                    "/removeuser &lt;id&gt; — удалить пользователя\n\n"
+                    "🗄 <b>База данных:</b>\n"
+                    "/dbstats — размер и статистика БД\n"
+                    "/dbclean — очистить старые записи",
                     parse_mode="HTML"
                 )
             else:
@@ -275,6 +278,41 @@ async def main():
                 )
 
         await message.answer("\n".join(lines), parse_mode="HTML")
+
+    # ── /dbstats — статистика и очистка БД (только админ) ───
+    @dp.message(Command("dbstats"))
+    async def cmd_dbstats(message: Message):
+        if not auth.is_admin(message.chat.id):
+            await message.answer("🚫 Только для администратора.")
+            return
+        stats = await db.get_db_stats()
+        await message.answer(
+            f"🗄 <b>Статистика базы данных</b>\n\n"
+            f"📦 Размер файла: <b>{stats['size_kb']} КБ</b>\n"
+            f"📊 Всего сигналов: <b>{stats['total_signals']}</b>\n"
+            f"📅 За последние 7 дней: <b>{stats['week_signals']}</b>\n"
+            f"🕐 Самый старый: <b>{stats['oldest']}</b>\n"
+            f"🕐 Самый новый: <b>{stats['newest']}</b>\n\n"
+            f"⚙️ Хранение: <b>{config.DB_KEEP_DAYS} дней</b>\n\n"
+            f"Для ручной очистки: /dbclean",
+            parse_mode="HTML"
+        )
+
+    @dp.message(Command("dbclean"))
+    async def cmd_dbclean(message: Message):
+        if not auth.is_admin(message.chat.id):
+            await message.answer("🚫 Только для администратора.")
+            return
+        await message.answer("🧹 Запускаю очистку...")
+        deleted = await db.cleanup_old_signals(keep_days=config.DB_KEEP_DAYS)
+        stats = await db.get_db_stats()
+        await message.answer(
+            f"✅ <b>Очистка завершена</b>\n\n"
+            f"🗑 Удалено записей: <b>{deleted}</b>\n"
+            f"📦 Размер после: <b>{stats['size_kb']} КБ</b>\n"
+            f"📊 Осталось сигналов: <b>{stats['total_signals']}</b>",
+            parse_mode="HTML"
+        )
 
     asyncio.create_task(scanner.run_forever())
     logger.info("Bot started")

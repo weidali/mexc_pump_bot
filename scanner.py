@@ -57,12 +57,16 @@ class Scanner:
 
     async def run_forever(self):
         logger.info("Scanner started")
-        # Прогреваем кэш валидных символов при старте
         await self.client.get_default_symbols()
         while True:
             try:
                 if self._running:
                     await self._scan_cycle()
+                # Очистка БД раз в сутки (каждые 1440 циклов по 1 минуте)
+                if self._cycle_count % 1440 == 0 and self._cycle_count > 0:
+                    deleted = await self.db.cleanup_old_signals(keep_days=self.cfg.DB_KEEP_DAYS)
+                    if deleted:
+                        logger.info(f"DB cleanup: removed {deleted} old signals")
             except Exception as e:
                 logger.exception(f"Scan cycle error: {e}")
             await asyncio.sleep(self.cfg.SCAN_INTERVAL_SEC)
@@ -184,3 +188,4 @@ class Scanner:
             })
         result.sort(key=lambda x: x["volume_usdt"], reverse=True)
         return result
+        
