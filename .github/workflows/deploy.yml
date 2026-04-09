@@ -53,7 +53,10 @@ jobs:
             MEXC_SECRET=${{ secrets.MEXC_SECRET }}
             ENVEOF
 
-            # ── 5. Перезапускаем бота ─────────────────────────
+            # ── 5. Права на скрипты
+            chmod +x "$DEPLOY_PATH/start.sh" "$DEPLOY_PATH/stop.sh" "$DEPLOY_PATH/watchdog.sh"
+
+            # ── 6. Перезапускаем бота ─────────────────────────
             echo ">>> Перезапускаем бота..."
             "$DEPLOY_PATH/start.sh"
 
