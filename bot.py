@@ -19,6 +19,7 @@ from scanner import Scanner
 from db import Database
 from auth import Auth, require_auth
 from version import __version__, __release_notes__
+from btc_strategy import BTCStrategy, TradeJournal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +37,13 @@ async def main():
     dp = Dispatcher()
     auth = Auth(db=db, admin_chat_id=config.ADMIN_CHAT_ID)
     scanner = Scanner(config=config, bot=bot, db=db)
+    btc = BTCStrategy(
+        bot=bot,
+        mexc_client=scanner.client,
+        db_path=config.DB_PATH.replace("signals.db", "trades.db"),
+        subscribers_fn=db.get_subscribers,
+    )
+    await btc.init()
 
     # ── /start — лендинг бота ────────────────────────────────
     @dp.message(Command("start"))
@@ -59,7 +67,11 @@ async def main():
                     "/removeuser &lt;id&gt; — удалить пользователя\n\n"
                     "🗄 <b>База данных:</b>\n"
                     "/dbstats — размер и статистика БД\n"
-                    "/dbclean — очистить старые записи",
+                    "/dbclean — очистить старые записи\n\n"
+                    "📈 <b>BTC стратегия:</b>\n"
+                    "/btc — статус стратегии\n"
+                    "/btcstats — статистика сделок\n"
+                    "/btctrades — последние сделки",
                     parse_mode="HTML"
                 )
             else:
@@ -383,6 +395,62 @@ async def main():
             parse_mode="HTML"
         )
 
+    # ── BTC стратегия ─────────────────────────────────────────
+    @dp.message(Command("btc"))
+    @require_auth(auth)
+    async def cmd_btc(message: Message):
+        rng = btc.detector.ny_range
+        state = btc.detector.state.value
+        trade = btc.trade_mgr.active_setup
+
+        lines = ["📈 <b>BTC Стратегия — NY First 4H</b>\n"]
+        lines.append(f"🔄 Статус: <b>{state}</b>")
+
+        if rng:
+            lines.append(
+                f"\n📐 <b>Диапазон сегодня:</b>\n"
+                f"  🔼 Хай: <code>${rng.high:,.2f}</code>\n"
+                f"  🔽 Лой: <code>${rng.low:,.2f}</code>\n"
+                f"  📏 Размер: ${rng.range_size:,.2f} ({rng.range_pct:.2f}%)"
+            )
+
+        if trade:
+            lines.append(
+                f"\n🟢 <b>Активная сделка:</b>\n"
+                f"  Направление: {trade.direction.upper()}\n"
+                f"  Вход: <code>${trade.entry_price:,.2f}</code>\n"
+                f"  SL: <code>${trade.stop_loss:,.2f}</code>\n"
+                f"  TP1: <code>${trade.tp1:,.2f}</code>\n"
+                f"  TP2: <code>${trade.tp2:,.2f}</code>"
+            )
+
+        lines.append(f"\nСетапов сегодня: <b>{len(btc.detector.setups_today)}</b>")
+        lines.append("\n/btcstats — статистика сделок")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
+    @dp.message(Command("btcstats"))
+    @require_auth(auth)
+    async def cmd_btcstats(message: Message):
+        stats = await btc.journal.get_stats(days=30)
+        await message.answer(TradeJournal.format_stats(stats), parse_mode="HTML")
+
+    @dp.message(Command("btctrades"))
+    @require_auth(auth)
+    async def cmd_btctrades(message: Message):
+        trades = await btc.journal.get_recent_trades(10)
+        if not trades:
+            await message.answer("📭 Сделок пока нет.")
+            return
+        lines = ["📋 <b>Последние 10 сделок BTC</b>\n"]
+        for t in trades:
+            pnl = t.get("pnl_total", 0) or 0
+            icon = "✅" if pnl > 0 else ("❌" if pnl < 0 else "〰️")
+            lines.append(
+                f"{icon} {t['trade_date']} {t['direction'].upper()} "
+                f"${t['entry']:,.0f} → <b>{pnl:+,.0f}$</b> [{t['status']}]"
+            )
+        await message.answer("\n".join(lines), parse_mode="HTML")
+
     # ── /version ──────────────────────────────────────────────
     @dp.message(Command("version"))
     @require_auth(auth)
@@ -395,6 +463,7 @@ async def main():
         )
 
     asyncio.create_task(scanner.run_forever())
+    asyncio.create_task(btc.run_forever())
     logger.info("Bot started")
     await dp.start_polling(bot)
 
