@@ -199,7 +199,7 @@ __version__ = "1.1.0"
 __release_notes__ = "Добавлена авторизация, inline кнопки, очистка БД"
 
 git add version.py
-git commit -m "bump: 1.1.0"
+git commit -m "bump: 1.3.1"
 
 # Правила
 1.0.0
