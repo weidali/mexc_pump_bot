@@ -1,9 +1,12 @@
 """
 Scanner — главный цикл сканирования.
-Теперь включает:
-  - Spot анализ (volume spike, price pump, CVD)
-  - Futures анализ (OI spike, funding rate)
-  - Follow-up через 15 и 30 минут
+Включает все детекторы:
+  - Spot: volume spike, price pump, CVD
+  - Futures: OI spike, funding rate
+  - Accumulation: паттерн "ступенька"
+  - Correlation: декорреляция с BTC/ETH/alts
+  - PumpHistory: повторные пампы
+  - Follow-up: 15 и 30 минут
 """
 import asyncio
 import logging
@@ -13,6 +16,9 @@ from typing import Any, Dict, List, Optional
 from aiogram import Bot
 
 from analyzer import Analyzer, SignalResult, FuturesAnalyzer, FuturesSignal
+from accumulation_detector import AccumulationDetector
+from correlation_filter import CorrelationFilter, ALT_INDEX_SYMBOLS
+from pump_history import PumpHistory
 from config import Config
 from db import Database
 from mexc_client import MEXCClient
@@ -22,6 +28,9 @@ from signal_tracker import SignalTracker
 logger = logging.getLogger(__name__)
 
 CONCURRENCY = 8
+
+# Символы рынка — всегда грузим для корреляции
+MARKET_SYMBOLS = {"BTCUSDT", "ETHUSDT"} | set(ALT_INDEX_SYMBOLS)
 
 
 class Scanner:
@@ -33,6 +42,9 @@ class Scanner:
         self.futures_client = MEXCFuturesClient()
         self.analyzer = Analyzer(config)
         self.futures_analyzer = FuturesAnalyzer()
+        self.accumulation = AccumulationDetector()
+        self.correlation = CorrelationFilter()
+        self.pump_history = PumpHistory(db=db)
         self.tracker = SignalTracker(bot=bot, mexc_client=self.client)
 
         self._monitored: List[str] = []
@@ -40,10 +52,7 @@ class Scanner:
         self._running = True
         self._semaphore = asyncio.Semaphore(CONCURRENCY)
         self._cycle_count = 0
-
-        # Кэш OI предыдущего цикла: symbol → oi_value
         self._oi_cache: Dict[str, float] = {}
-        # Кэш цены предыдущего цикла
         self._price_cache: Dict[str, float] = {}
 
     def pause(self):  self._running = False
@@ -71,7 +80,6 @@ class Scanner:
     async def run_forever(self):
         logger.info("Scanner started")
         await self.client.get_default_symbols()
-        # Прогреваем futures symbol map
         await self.futures_client._load_symbol_map()
 
         while True:
@@ -99,19 +107,25 @@ class Scanner:
         top = self._filter_and_sort(tickers, valid)[: self.cfg.TOP_N_SYMBOLS]
         self._monitored = [t["symbol"] for t in top]
 
-        logger.info(f"Scanning {len(self._monitored)} symbols...")
+        # Добавляем рыночные символы для корреляции (если не в топе)
+        all_symbols = list(set(self._monitored) | MARKET_SYMBOLS)
 
-        # Batch-загрузка всех OI из futures одним запросом
+        logger.info(f"Scanning {len(self._monitored)} symbols (+{len(MARKET_SYMBOLS)} market)...")
+
+        # Batch OI
         oi_batch = await self._load_oi_batch()
 
+        # Сначала грузим рыночные данные для корреляции
+        await self._load_market_data()
+
+        # Анализируем только топ монеты (не рыночные индексы)
         tasks = [self._analyze_symbol(sym, oi_batch) for sym in self._monitored]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        signals = [r for r in results if isinstance(r, (SignalResult, FuturesSignal))]
-        spot_signals = [r for r in signals if isinstance(r, SignalResult)]
-        fut_signals  = [r for r in signals if isinstance(r, FuturesSignal)]
+        spot_signals = [r for r in results if isinstance(r, SignalResult)]
+        fut_signals  = [r for r in results if isinstance(r, FuturesSignal)]
 
-        logger.info(f"Spot signals: {len(spot_signals)}, Futures signals: {len(fut_signals)}")
+        logger.info(f"Spot: {len(spot_signals)}, Futures: {len(fut_signals)}")
 
         for sig in spot_signals:
             await self._maybe_send_spot_alert(sig)
@@ -120,13 +134,23 @@ class Scanner:
 
         self._last_scan = datetime.now(timezone.utc)
 
+    async def _load_market_data(self):
+        """Грузим свечи BTC, ETH и топ алтов для корреляционного фильтра."""
+        tasks = {
+            sym: self.client.get_klines(sym, interval=self.cfg.KLINE_INTERVAL, limit=20)
+            for sym in MARKET_SYMBOLS
+        }
+        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
+        for sym, klines in zip(tasks.keys(), results):
+            if isinstance(klines, list) and klines:
+                closes = [float(k[4]) for k in klines]
+                self.correlation.update_cache(sym, closes)
+
     async def _load_oi_batch(self) -> Dict[str, float]:
-        """Загружает OI для всех фьючерсных тикеров одним запросом."""
         try:
             tickers = await self.futures_client.get_all_tickers()
             result = {}
             await self.futures_client._load_symbol_map()
-            # Инвертируем маппинг: BTC_USDT → BTCUSDT
             inv_map = {v: k for k, v in self.futures_client._symbol_map.items()}
             for t in tickers:
                 fut_sym = t.get("symbol", "")
@@ -141,9 +165,7 @@ class Scanner:
             logger.debug(f"OI batch load failed: {e}")
             return {}
 
-    async def _analyze_symbol(
-        self, symbol: str, oi_batch: Dict[str, float]
-    ) -> Optional[Any]:
+    async def _analyze_symbol(self, symbol: str, oi_batch: Dict[str, float]) -> Optional[Any]:
         async with self._semaphore:
             try:
                 klines, trades = await asyncio.gather(
@@ -157,20 +179,26 @@ class Scanner:
                 current_price = closes[-1]
                 prev_price = self._price_cache.get(symbol, current_price)
 
-                # ── Spot анализ ───────────────────────────────
+                # ── 1. Spot анализ ────────────────────────────
                 spot_result = self.analyzer.analyze(symbol, klines, trades)
 
-                # ── Futures анализ ────────────────────────────
+                # ── 2. Accumulation (паттерн "ступенька") ─────
+                accum = self.accumulation.detect(symbol, klines, trades)
+
+                # ── 3. Корреляция с рынком ────────────────────
+                corr = None
+                if self.correlation.has_market_data:
+                    corr = self.correlation.analyze(symbol, closes)
+
+                # ── 4. Futures анализ ─────────────────────────
                 oi_current = oi_batch.get(symbol)
-                oi_prev = self._oi_cache.get(symbol)
+                oi_prev    = self._oi_cache.get(symbol)
                 funding_rate = None
 
-                # Funding грузим только если есть спот-сигнал или OI изменился заметно
                 should_check_futures = (
-                    spot_result is not None or
+                    spot_result is not None or accum is not None or corr is not None or
                     (oi_current and oi_prev and abs(oi_current - oi_prev) / max(oi_prev, 1) > 0.05)
                 )
-
                 if should_check_futures:
                     fr_data = await self.futures_client.get_funding_rate(symbol)
                     if fr_data:
@@ -190,20 +218,34 @@ class Scanner:
                 if oi_current is not None:
                     self._oi_cache[symbol] = oi_current
 
-                # Если оба сигнала — усиливаем spot сигнал данными futures
-                if spot_result and fut_result:
-                    spot_result.score += fut_result.score * 0.5
-                    spot_result.details.extend(fut_result.details)
-                    spot_result.oi_usdt = fut_result.oi_usdt
-                    spot_result.oi_change_pct = fut_result.oi_change_pct
-                    spot_result.funding_rate = fut_result.funding_rate
-                    spot_result.has_futures_confirm = True
-                    return spot_result
-
+                # ── 5. Сборка итогового сигнала ───────────────
                 if spot_result:
-                    spot_result.has_futures_confirm = False
-                    return spot_result
+                    # Усиливаем spot сигнал подтверждениями
+                    if fut_result:
+                        spot_result.score += fut_result.score * 0.5
+                        spot_result.details.extend(fut_result.details)
+                        spot_result.oi_usdt = fut_result.oi_usdt
+                        spot_result.oi_change_pct = fut_result.oi_change_pct
+                        spot_result.funding_rate = fut_result.funding_rate
+                        spot_result.has_futures_confirm = True
 
+                    if accum:
+                        spot_result.score += accum.score * 0.5
+                        spot_result.accum_result = accum
+
+                    if corr:
+                        spot_result.score += corr.score * 0.8
+                        spot_result.corr_result = corr
+
+                    spot_result.triggered = spot_result.score >= self.cfg.MIN_SIGNAL_SCORE
+                    return spot_result if spot_result.triggered else None
+
+                # Только накопление без спот-сигнала — ранний сигнал
+                if accum and accum.score >= 1.5:
+                    early = self._make_early_signal(symbol, current_price, accum, corr)
+                    return early
+
+                # Только futures
                 if fut_result and fut_result.score >= 2.0:
                     return fut_result
 
@@ -212,6 +254,21 @@ class Scanner:
             except Exception as e:
                 logger.debug(f"Error analyzing {symbol}: {e}")
                 return None
+
+    def _make_early_signal(self, symbol, price, accum, corr) -> SignalResult:
+        """Создаёт ранний сигнал на основе паттерна накопления."""
+        from analyzer import SignalResult
+        sig = SignalResult(
+            symbol=symbol,
+            price=price,
+            score=accum.score + (corr.score if corr else 0),
+            triggered=True,
+        )
+        sig.details = accum.details[:]
+        sig.accum_result = accum
+        sig.corr_result = corr
+        sig.is_early_signal = True
+        return sig
 
     # ── Алерты ───────────────────────────────────────────────
 
@@ -223,7 +280,11 @@ class Scanner:
                 return
 
         await self.db.save_signal(sig)
-        text = self._format_spot_alert(sig)
+
+        # Загружаем историю пампов
+        history = await self.pump_history.analyze(sig.symbol)
+
+        text = self._format_spot_alert(sig, history)
         subscribers = await self.db.get_subscribers()
 
         for chat_id in subscribers:
@@ -232,11 +293,9 @@ class Scanner:
             except Exception as e:
                 logger.warning(f"Failed to send to {chat_id}: {e}")
 
-        # Запускаем follow-up трекер
         self.tracker.track(sig.symbol, sig.price, subscribers)
 
     async def _maybe_send_futures_alert(self, sig: FuturesSignal):
-        """Отдельный алерт только по futures сигналу (без спота)."""
         last = await self.db.get_last_signal_time(sig.symbol)
         if last:
             elapsed = (datetime.now(timezone.utc) - last).total_seconds() / 60
@@ -251,24 +310,23 @@ class Scanner:
             except Exception as e:
                 logger.warning(f"Failed to send to {chat_id}: {e}")
 
-    def _format_spot_alert(self, sig: SignalResult) -> str:
-        if sig.score >= 5.0:
-            icon, level = "🔴🔴🔴", "СИЛЬНЫЙ СИГНАЛ"
-        elif sig.score >= 3.0:
-            icon, level = "🟠🟠", "СИГНАЛ"
+    # ── Форматирование ────────────────────────────────────────
+
+    def _format_spot_alert(self, sig: SignalResult, history=None) -> str:
+        is_early = getattr(sig, "is_early_signal", False)
+        accum    = getattr(sig, "accum_result", None)
+        corr     = getattr(sig, "corr_result", None)
+
+        if is_early:
+            icon, level = "👁", "РАННИЙ СИГНАЛ (накопление)"
+        elif sig.score >= 6.0:
+            icon, level = "🔴🔴🔴", "ОЧЕНЬ СИЛЬНЫЙ СИГНАЛ"
+        elif sig.score >= 4.0:
+            icon, level = "🔴🔴", "СИЛЬНЫЙ СИГНАЛ"
+        elif sig.score >= 2.5:
+            icon, level = "🟠", "СИГНАЛ"
         else:
             icon, level = "🟡", "слабый сигнал"
-
-        # Подтверждение фьючерсами
-        confirm = ""
-        if getattr(sig, "has_futures_confirm", False):
-            confirm = "\n🔮 <b>Подтверждён фьючерсами</b>"
-            oi = getattr(sig, "oi_change_pct", 0)
-            fr = getattr(sig, "funding_rate", None)
-            if oi:
-                confirm += f"\n  • OI вырос на +{oi:.1f}%"
-            if fr is not None:
-                confirm += f"\n  • Funding rate: {fr:.4f}"
 
         lines = [
             f"{icon} <b>PUMP &amp; DUMP — {level}</b>",
@@ -276,23 +334,53 @@ class Scanner:
             f"📌 <b>{sig.symbol}</b>",
             f"💵 Цена: <code>{sig.price:.6g}</code> USDT",
             f"📊 Score: <b>{sig.score:.1f}</b>",
-            f"",
-            f"🔍 <b>Спот признаки:</b>",
         ]
-        if sig.volume_spike:
-            lines.append(f"  • Объём ×{sig.volume_spike_x:.1f} от нормы 📦")
-        if sig.price_pump:
-            lines.append(f"  • Рост цены +{sig.price_pump_pct:.1f}% 🚀")
-        if sig.cvd_divergence:
-            lines.append(f"  • CVD дивергенция {sig.cvd_delta_norm:+.2f} 📉")
-        if confirm:
-            lines.append(confirm)
+
+        # Спот признаки
+        has_spot = sig.volume_spike or sig.price_pump or sig.cvd_divergence
+        if has_spot:
+            lines.append(f"\n🔍 <b>Спот:</b>")
+            if sig.volume_spike:
+                lines.append(f"  • Объём ×{sig.volume_spike_x:.1f} от нормы 📦")
+            if sig.price_pump:
+                lines.append(f"  • Рост цены +{sig.price_pump_pct:.1f}% 🚀")
+            if sig.cvd_divergence:
+                lines.append(f"  • CVD {sig.cvd_delta_norm:+.2f} 📉")
+
+        # Накопление
+        if accum:
+            lines.append(f"\n👁 <b>Накопление ({accum.duration_candles} свечей):</b>")
+            lines.append(f"  • Канал: {accum.price_range_pct:.2f}% | Vol ×{accum.avg_volume_ratio:.1f}")
+            lines.append(f"  • CVD тренд: {accum.cvd_trend:+.3f}")
+
+        # Корреляция
+        if corr:
+            lines.append(f"\n📡 <b>Декорреляция с рынком:</b>")
+            lines.append(f"  • Монета {corr.coin_change_pct:+.1f}% / BTC {corr.btc_change_pct:+.1f}% / ETH {corr.eth_change_pct:+.1f}%")
+            lines.append(f"  • Рынок: {corr.market_direction} | Разрыв: {corr.coin_change_pct - (corr.btc_change_pct + corr.eth_change_pct)/2:+.1f}%")
+
+        # Фьючерсы
+        if getattr(sig, "has_futures_confirm", False):
+            lines.append(f"\n🔮 <b>Подтверждено фьючерсами:</b>")
+            if getattr(sig, "oi_change_pct", 0):
+                lines.append(f"  • OI +{sig.oi_change_pct:.1f}%")
+            if getattr(sig, "funding_rate", None) is not None:
+                lines.append(f"  • Funding: {sig.funding_rate:.4f}")
+
+        # История пампов
+        if history:
+            hist_text = self.pump_history.format_for_alert(history)
+            if hist_text:
+                lines.append(hist_text)
+
         lines += [
             f"",
-            f"⚡ <i>Возможный шорт при развороте</i>",
-            f"⏱ <i>Follow-up через 15 и 30 минут</i>",
-            f"⚠️ <i>Не финансовый совет. DYOR.</i>",
+            f"⚡ <i>{'Возможный вход до пампа' if is_early else 'Возможный шорт при развороте'}</i>",
         ]
+        if not is_early:
+            lines.append(f"⏱ <i>Follow-up через 15 и 30 минут</i>")
+        lines.append(f"⚠️ <i>Не финансовый совет. DYOR.</i>")
+
         return "\n".join(lines)
 
     def _format_futures_alert(self, sig: FuturesSignal) -> str:
@@ -306,13 +394,12 @@ class Scanner:
         ]
         if sig.oi_spike:
             oi_usdt = f" (${sig.oi_usdt:,.0f})" if sig.oi_usdt else ""
-            lines.append(f"  • OI вырос +{sig.oi_change_pct:.1f}%{oi_usdt} 📈")
+            lines.append(f"  • OI +{sig.oi_change_pct:.1f}%{oi_usdt} 📈")
         if sig.funding_anomaly:
-            lines.append(f"  • Funding rate: <b>{sig.funding_rate:.4f}</b> 📉")
-            lines.append(f"    Шортеры платят, но держат позицию")
+            lines.append(f"  • Funding: <b>{sig.funding_rate:.4f}</b> 📉")
         lines += [
             f"",
-            f"⚡ <i>Крупные игроки готовятся к развороту</i>",
+            f"⚡ <i>Крупные готовятся к развороту</i>",
             f"⚠️ <i>Не финансовый совет. DYOR.</i>",
         ]
         return "\n".join(lines)

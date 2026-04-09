@@ -94,6 +94,19 @@ class Database:
                 row = await cursor.fetchone()
         return row[0] if row else 0
 
+    async def get_signals_for_symbol(self, symbol: str, since: "datetime") -> List[dict]:
+        """История сигналов по монете за период — для PumpHistory."""
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """SELECT symbol, price, score, created_at
+                   FROM signals WHERE symbol = ? AND created_at >= ?
+                   ORDER BY created_at ASC""",
+                (symbol, since.isoformat())
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     async def cleanup_old_signals(self, keep_days: int = 30) -> int:
         """Удаляет сигналы старше keep_days дней. Возвращает кол-во удалённых."""
         cutoff = (datetime.now(timezone.utc) - timedelta(days=keep_days)).isoformat()
@@ -204,4 +217,3 @@ class Database:
             ) as cursor:
                 rows = await cursor.fetchall()
         return [dict(r) for r in rows]
-        
