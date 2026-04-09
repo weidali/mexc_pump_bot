@@ -51,13 +51,17 @@ jobs:
             TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
             MEXC_API_KEY=${{ secrets.MEXC_API_KEY }}
             MEXC_SECRET=${{ secrets.MEXC_SECRET }}
+            DB_PATH=/var/www/u1229058/data/tmp/pump-bot-data/signals.db
             ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}
             ENVEOF
 
-            # ── 5. Права на скрипты
+            # ── 5. Папка для данных (база, логи) — вне кода
+            mkdir -p "/var/www/u1229058/data/tmp/pump-bot-data"
+
+            # ── 6. Права на скрипты
             chmod +x "$DEPLOY_PATH/start.sh" "$DEPLOY_PATH/stop.sh" "$DEPLOY_PATH/watchdog.sh"
 
-            # ── 6. Перезапускаем бота ─────────────────────────
+            # ── 7. Перезапускаем бота ─────────────────────────
             echo ">>> Перезапускаем бота..."
             "$DEPLOY_PATH/start.sh"
 
