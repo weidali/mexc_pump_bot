@@ -1,0 +1,115 @@
+name: Release on version bump
+
+on:
+  push:
+    branches: [ master, main ]
+
+jobs:
+  check-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # нужно для сравнения с предыдущим коммитом
+
+      - name: Extract current version
+        id: current
+        run: |
+          VERSION=$(python3 -c "
+          import re, sys
+          content = open('version.py').read()
+          m = re.search(r'__version__\s*=\s*[\"\']([\d.]+)[\"\']]', content)
+          if not m:
+              m = re.search(r'__version__\s*=\s*[\"\']([\d.]+)', content)
+          print(m.group(1) if m else '')
+          ")
+          NOTES=$(python3 -c "
+          import re
+          content = open('version.py').read()
+          m = re.search(r'__release_notes__\s*=\s*[\"\'](.*?)[\"\']\s*$', content, re.MULTILINE)
+          print(m.group(1) if m else 'Release')
+          ")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "notes=$NOTES" >> $GITHUB_OUTPUT
+          echo "Current version: $VERSION"
+
+      - name: Extract previous version
+        id: previous
+        run: |
+          git show HEAD~1:version.py > /tmp/prev_version.py 2>/dev/null || echo '__version__ = "0.0.0"' > /tmp/prev_version.py
+          PREV=$(python3 -c "
+          import re
+          content = open('/tmp/prev_version.py').read()
+          m = re.search(r'__version__\s*=\s*[\"\']([\d.]+)', content)
+          print(m.group(1) if m else '0.0.0')
+          ")
+          echo "version=$PREV" >> $GITHUB_OUTPUT
+          echo "Previous version: $PREV"
+
+      - name: Check if version bumped
+        id: check
+        run: |
+          CURRENT="${{ steps.current.outputs.version }}"
+          PREVIOUS="${{ steps.previous.outputs.version }}"
+          echo "Comparing: $PREVIOUS → $CURRENT"
+
+          if [ -z "$CURRENT" ]; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "release_type=none" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [ "$CURRENT" = "$PREVIOUS" ]; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "release_type=none" >> $GITHUB_OUTPUT
+            echo "Version unchanged, skipping release"
+            exit 0
+          fi
+
+          # Разбиваем на major.minor.patch
+          IFS='.' read -r CUR_MAJ CUR_MIN CUR_PAT <<< "$CURRENT"
+          IFS='.' read -r PRE_MAJ PRE_MIN PRE_PAT <<< "$PREVIOUS"
+
+          if [ "$CUR_MAJ" != "$PRE_MAJ" ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "release_type=major" >> $GITHUB_OUTPUT
+            echo "Major version bump → creating release"
+          elif [ "$CUR_MIN" != "$PRE_MIN" ]; then
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "release_type=minor" >> $GITHUB_OUTPUT
+            echo "Minor version bump → creating release"
+          else
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "release_type=patch" >> $GITHUB_OUTPUT
+            echo "Patch bump → skipping release (deploy only)"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.should_release == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = "${{ steps.current.outputs.version }}";
+            const notes = "${{ steps.current.outputs.notes }}";
+            const releaseType = "${{ steps.check.outputs.release_type }}";
+            const isMajor = releaseType === "major";
+
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: `v${version}`,
+              name: `v${version}`,
+              body: `## What's new\n\n${notes}\n\n---\n_${isMajor ? "🔴 Major" : "🟡 Minor"} release_`,
+              draft: false,
+              prerelease: false,
+            });
+            console.log(`Release v${version} created (${releaseType})`);
+
+      - name: Summary
+        run: |
+          echo "### Version Check" >> $GITHUB_STEP_SUMMARY
+          echo "- Previous: \`${{ steps.previous.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Current:  \`${{ steps.current.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Release:  \`${{ steps.check.outputs.should_release }}\` (${{ steps.check.outputs.release_type }})" >> $GITHUB_STEP_SUMMARY

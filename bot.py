@@ -18,6 +18,7 @@ from config import Config
 from scanner import Scanner
 from db import Database
 from auth import Auth, require_auth
+from version import __version__, __release_notes__
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,7 +46,7 @@ async def main():
             if auth.is_admin(chat_id):
                 await message.answer(
                     "🤖 <b>MEXC Pump &amp; Dump Scanner</b>\n\n"
-                    "👑 <b>Режим администратора</b>\n\n"
+                    f"👑 <b>Режим администратора</b> · v{__version__}\n\n"
                     "📊 <b>Сканер:</b>\n"
                     "/status — статус и статистика\n"
                     "/top — топ-20 монет по объёму\n"
@@ -379,6 +380,17 @@ async def main():
             f"🗑 Удалено записей: <b>{deleted}</b>\n"
             f"📦 Размер после: <b>{stats['size_kb']} КБ</b>\n"
             f"📊 Осталось сигналов: <b>{stats['total_signals']}</b>",
+            parse_mode="HTML"
+        )
+
+    # ── /version ──────────────────────────────────────────────
+    @dp.message(Command("version"))
+    @require_auth(auth)
+    async def cmd_version(message: Message):
+        await message.answer(
+            f"🤖 <b>MEXC Pump &amp; Dump Scanner</b>\n\n"
+            f"📦 Версия: <b>v{__version__}</b>\n"
+            f"📝 {__release_notes__}",
             parse_mode="HTML"
         )
 
