@@ -6,7 +6,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
 try:
     from dotenv import load_dotenv
@@ -251,33 +251,101 @@ async def main():
         approved = [r for r in rows if r["approved"]]
         pending  = [r for r in rows if not r["approved"]]
 
-        lines = [f"👥 <b>Пользователи</b> (всего: {len(rows)})\n"]
-
+        # ── Активные пользователи ─────────────────────────────
         if approved:
-            lines.append(f"✅ <b>Активные ({len(approved)})</b>")
+            lines = [f"✅ <b>Активные ({len(approved)})</b>\n"]
             for r in approved:
                 name = r["full_name"] or "—"
                 uname = f" @{r['username']}" if r["username"] else ""
                 date = r["added_at"][:10]
-                lines.append(
-                    f"  • {name}{uname}\n"
-                    f"    <code>{r['chat_id']}</code> · с {date}\n"
-                    f"    /removeuser {r['chat_id']}"
-                )
+                lines.append(f"• {name}{uname} · <code>{r['chat_id']}</code> · с {date}")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text=f"🗑 Удалить {r['full_name'] or r['chat_id']}",
+                    callback_data=f"remove_{r['chat_id']}"
+                )]
+                for r in approved
+            ])
+            await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=keyboard)
 
+        # ── Ожидают одобрения ─────────────────────────────────
         if pending:
-            lines.append(f"\n⏳ <b>Ожидают одобрения ({len(pending)})</b>")
+            lines = [f"⏳ <b>Ожидают одобрения ({len(pending)})</b>\n"]
             for r in pending:
                 name = r["full_name"] or "—"
                 uname = f" @{r['username']}" if r["username"] else ""
                 date = r["added_at"][:10]
-                lines.append(
-                    f"  • {name}{uname}\n"
-                    f"    <code>{r['chat_id']}</code> · {date}\n"
-                    f"    /adduser {r['chat_id']}"
-                )
+                lines.append(f"• {name}{uname} · <code>{r['chat_id']}</code> · {date}")
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"✅ {r['full_name'] or r['chat_id']}",
+                        callback_data=f"approve_{r['chat_id']}"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌",
+                        callback_data=f"decline_{r['chat_id']}"
+                    ),
+                ]
+                for r in pending
+            ])
+            await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=keyboard)
 
-        await message.answer("\n".join(lines), parse_mode="HTML")
+        if not approved and not pending:
+            await message.answer("📭 Список пользователей пуст.")
+
+    # ── Callback кнопок одобрения/удаления ───────────────────
+    @dp.callback_query(lambda c: c.data and c.data.startswith(("approve_", "remove_", "decline_")))
+    async def handle_user_action(callback: CallbackQuery):
+        if not auth.is_admin(callback.from_user.id):
+            await callback.answer("🚫 Нет доступа", show_alert=True)
+            return
+
+        action, target_id = callback.data.split("_", 1)
+        target_id = int(target_id)
+
+        if action == "approve":
+            added = await auth.add_user(target_id, callback.from_user.id)
+            if added:
+                await callback.answer("✅ Пользователь одобрен")
+                await callback.message.edit_text(
+                    callback.message.text + f"\n\n✅ <code>{target_id}</code> одобрен",
+                    parse_mode="HTML"
+                )
+                try:
+                    await callback.bot.send_message(
+                        target_id,
+                        "✅ <b>Доступ одобрен!</b>\n\nТеперь вы можете пользоваться ботом.\nОтправьте /start",
+                        parse_mode="HTML"
+                    )
+                except Exception:
+                    pass
+            else:
+                await callback.answer("ℹ️ Уже одобрен")
+
+        elif action == "remove":
+            removed = await auth.remove_user(target_id)
+            if removed:
+                await callback.answer("🗑 Удалён")
+                await callback.message.edit_text(
+                    callback.message.text + f"\n\n🗑 <code>{target_id}</code> удалён",
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            else:
+                await callback.answer("ℹ️ Пользователь не найден")
+
+        elif action == "decline":
+            removed = await db.remove_subscriber(target_id)
+            if removed:
+                await callback.answer("❌ Отклонён и удалён из списка")
+                await callback.message.edit_text(
+                    callback.message.text + f"\n\n❌ <code>{target_id}</code> отклонён",
+                    parse_mode="HTML",
+                    reply_markup=None
+                )
+            else:
+                await callback.answer("ℹ️ Не найден")
 
     # ── /dbstats — статистика и очистка БД (только админ) ───
     @dp.message(Command("dbstats"))
