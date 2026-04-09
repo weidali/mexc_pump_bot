@@ -1,13 +1,12 @@
 """
-MEXC REST API client (публичные + приватные эндпоинты).
-Использует aiohttp для async запросов.
+MEXC REST API client
 """
 import asyncio
 import hashlib
 import hmac
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import urlencode
 
 import aiohttp
@@ -17,13 +16,14 @@ logger = logging.getLogger(__name__)
 
 class MEXCClient:
     BASE_URL = "https://api.mexc.com"
-    MAX_RETRIES = 3
-    RETRY_DELAY = 2.0
+    MAX_RETRIES = 2
+    RETRY_DELAY = 1.5
 
     def __init__(self, api_key: str = "", secret: str = ""):
         self.api_key = api_key
         self.secret = secret
         self._session: Optional[aiohttp.ClientSession] = None
+        self._valid_symbols: Optional[Set[str]] = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -39,12 +39,7 @@ class MEXCClient:
             self.secret.encode(), query.encode(), hashlib.sha256
         ).hexdigest()
 
-    async def _get(
-        self,
-        path: str,
-        params: Optional[Dict] = None,
-        signed: bool = False
-    ) -> Any:
+    async def _get(self, path: str, params: Optional[Dict] = None, signed: bool = False) -> Any:
         url = f"{self.BASE_URL}{path}"
         params = params or {}
 
@@ -60,31 +55,44 @@ class MEXCClient:
                         logger.warning("Rate limit hit, sleeping 5s")
                         await asyncio.sleep(5)
                         continue
+                    if resp.status == 400:
+                        # Не логируем — это ожидаемо для невалидных символов
+                        return None
                     resp.raise_for_status()
                     return await resp.json()
             except aiohttp.ClientError as e:
-                logger.warning(f"Request failed ({attempt+1}/{self.MAX_RETRIES}): {e}")
                 if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(self.RETRY_DELAY * (attempt + 1))
+                    await asyncio.sleep(self.RETRY_DELAY)
+                else:
+                    logger.debug(f"Request failed after retries: {path} — {e}")
         return None
+
+    # ── Список активных символов ─────────────────────────────
+
+    async def get_default_symbols(self) -> Set[str]:
+        """Возвращает множество активных спот символов от MEXC."""
+        if self._valid_symbols is not None:
+            return self._valid_symbols
+        data = await self._get("/api/v3/defaultSymbols")
+        if data and isinstance(data.get("data"), list):
+            self._valid_symbols = set(data["data"])
+            logger.info(f"Loaded {len(self._valid_symbols)} active symbols from MEXC")
+        else:
+            self._valid_symbols = set()
+        return self._valid_symbols
+
+    async def refresh_valid_symbols(self):
+        """Сбросить кэш и перезагрузить список символов."""
+        self._valid_symbols = None
+        await self.get_default_symbols()
 
     # ── Публичные методы ─────────────────────────────────────
 
     async def get_ticker_24h_all(self) -> List[Dict]:
-        """Все тикеры 24ч — цена, объём, изменение."""
         data = await self._get("/api/v3/ticker/24hr")
         return data if isinstance(data, list) else []
 
-    async def get_klines(
-        self,
-        symbol: str,
-        interval: str = "1m",
-        limit: int = 60
-    ) -> List[List]:
-        """
-        Свечи OHLCV.
-        Возвращает список: [open_time, open, high, low, close, volume, ...]
-        """
+    async def get_klines(self, symbol: str, interval: str = "1m", limit: int = 60) -> List[List]:
         data = await self._get(
             "/api/v3/klines",
             params={"symbol": symbol, "interval": interval, "limit": limit}
@@ -92,22 +100,11 @@ class MEXCClient:
         return data if isinstance(data, list) else []
 
     async def get_orderbook(self, symbol: str, limit: int = 20) -> Dict:
-        """Стакан заявок."""
-        data = await self._get(
-            "/api/v3/depth",
-            params={"symbol": symbol, "limit": limit}
-        )
+        data = await self._get("/api/v3/depth", params={"symbol": symbol, "limit": limit})
         return data or {}
 
     async def get_recent_trades(self, symbol: str, limit: int = 100) -> List[Dict]:
-        """
-        Последние сделки.
-        Поле isBuyerMaker: True → продавец агрессор (sell trade)
-        """
-        data = await self._get(
-            "/api/v3/trades",
-            params={"symbol": symbol, "limit": limit}
-        )
+        data = await self._get("/api/v3/trades", params={"symbol": symbol, "limit": limit})
         return data if isinstance(data, list) else []
 
     async def close(self):
