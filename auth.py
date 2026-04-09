@@ -62,7 +62,9 @@ def require_auth(auth: Auth):
                 await message.answer(
                     "🔒 <b>Доступ закрыт</b>\n\n"
                     "У вас нет доступа к этому боту.\n"
-                    "Отправьте /start чтобы запросить доступ.",
+                    "Отправьте /request чтобы запросить доступ.\n\n"
+                    "🤖 <b>MEXC Pump &amp; Dump Scanner</b>\n\n",
+                    # описание фич бота
                     parse_mode="HTML"
                 )
                 logger.warning(f"Unauthorized access attempt from {chat_id}")
