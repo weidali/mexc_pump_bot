@@ -160,6 +160,38 @@ cp .env.example .env
 python bot.py
 ```
 
+добавь секреты в GitHub
+
+
+  SERVER_HOST     = ***
+  SERVER_USER     = ***
+  SERVER_PORT     = ***
+  DEPLOY_PATH     = /var/www/***/data/tmp/pump-bot
+
+SERVER_SSH_KEY — скопируй вывод этой команды целиком:
+  cat ~/.ssh/github_actions
+
+  TELEGRAM_TOKEN  = токен бота
+  MEXC_API_KEY    = ключ mexc
+  MEXC_SECRET     = секрет mexc
+  ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}
+
+
+## Логика авторизации
+
+**1. Узнай свой chat_id** — напиши боту [@userinfobot](https://t.me/userinfobot) в Telegram.
+
+**Незнакомый пользователь** пишет `/start` → получает "доступ закрыт" → **тебе** (админу) прилетает уведомление с его chat_id и готовой командой для одобрения.
+
+**Ты** пишешь `/adduser 123456789` → пользователь получает уведомление "доступ одобрен" и начинает получать сигналы.
+
+**Команды для тебя (только для админа):**
+```
+/adduser 123456789    — добавить пользователя
+/removeuser 123456789 — убрать пользователя  
+/users                — список всех
+```
+
 ## Testing
 
 ```shell
