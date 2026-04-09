@@ -42,19 +42,35 @@ async def main():
         chat_id = message.chat.id
 
         if await auth.is_allowed(chat_id):
-            # Авторизованный пользователь — показываем меню
-            await message.answer(
-                "🤖 <b>MEXC Pump &amp; Dump Scanner</b>\n\n"
-                "Бот отслеживает манипуляции на шиткоинах MEXC "
-                "и даёт сигналы на шорт.\n\n"
-                "📋 <b>Команды:</b>\n"
-                "/status — статус сканера\n"
-                "/top — топ-20 монет по объёму\n"
-                "/stats — сигналы за 24ч\n"
-                "/pause — приостановить алерты\n"
-                "/resume — возобновить алерты",
-                parse_mode="HTML"
-            )
+            if auth.is_admin(chat_id):
+                await message.answer(
+                    "🤖 <b>MEXC Pump &amp; Dump Scanner</b>\n\n"
+                    "👑 <b>Режим администратора</b>\n\n"
+                    "📊 <b>Сканер:</b>\n"
+                    "/status — статус и статистика\n"
+                    "/top — топ-20 монет по объёму\n"
+                    "/stats — сигналы за 24ч\n"
+                    "/pause — приостановить алерты\n"
+                    "/resume — возобновить алерты\n\n"
+                    "👥 <b>Пользователи:</b>\n"
+                    "/users — список всех пользователей\n"
+                    "/adduser &lt;id&gt; — одобрить пользователя\n"
+                    "/removeuser &lt;id&gt; — удалить пользователя",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer(
+                    "🤖 <b>MEXC Pump &amp; Dump Scanner</b>\n\n"
+                    "Бот отслеживает манипуляции на шиткоинах MEXC "
+                    "и даёт сигналы на шорт.\n\n"
+                    "📋 <b>Команды:</b>\n"
+                    "/status — статус сканера\n"
+                    "/top — топ-20 монет по объёму\n"
+                    "/stats — сигналы за 24ч\n"
+                    "/pause — приостановить алерты\n"
+                    "/resume — возобновить алерты",
+                    parse_mode="HTML"
+                )
         else:
             # Незнакомый пользователь — красивый лендинг
             await message.answer(
