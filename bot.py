@@ -36,17 +36,18 @@ async def main():
     auth = Auth(db=db, admin_chat_id=config.ADMIN_CHAT_ID)
     scanner = Scanner(config=config, bot=bot, db=db)
 
-    # ── /start — запрос доступа ───────────────────────────────
+    # ── /start — лендинг бота ────────────────────────────────
     @dp.message(Command("start"))
     async def cmd_start(message: Message):
         chat_id = message.chat.id
-        username = message.from_user.username or "нет username"
-        full_name = message.from_user.full_name or ""
 
         if await auth.is_allowed(chat_id):
+            # Авторизованный пользователь — показываем меню
             await message.answer(
                 "🤖 <b>MEXC Pump &amp; Dump Scanner</b>\n\n"
-                "Команды:\n"
+                "Бот отслеживает манипуляции на шиткоинах MEXC "
+                "и даёт сигналы на шорт.\n\n"
+                "📋 <b>Команды:</b>\n"
                 "/status — статус сканера\n"
                 "/top — топ-20 монет по объёму\n"
                 "/stats — сигналы за 24ч\n"
@@ -54,13 +55,47 @@ async def main():
                 "/resume — возобновить алерты",
                 parse_mode="HTML"
             )
+        else:
+            # Незнакомый пользователь — красивый лендинг
+            await message.answer(
+                "🤖 <b>MEXC Pump &amp; Dump Scanner</b>\n\n"
+                "Бот в реальном времени сканирует топ шиткоины на MEXC "
+                "и выявляет признаки pump &amp; dump манипуляций.\n\n"
+                "⚡ <b>Что умеет бот:</b>\n"
+                "• Отслеживает 80+ монет каждую минуту\n"
+                "• Детектирует аномальный всплеск объёма\n"
+                "• Ловит резкий памп цены\n"
+                "• Анализирует CVD-дивергенцию (продают в рост)\n"
+                "• Отправляет алерт с оценкой силы сигнала\n\n"
+                "🔒 <b>Доступ закрыт</b>\n"
+                "Бот работает только для авторизованных пользователей.\n\n"
+                "👉 Отправьте /request чтобы запросить доступ.",
+                parse_mode="HTML"
+            )
+
+    # ── /request — запрос доступа ────────────────────────────
+    @dp.message(Command("request"))
+    async def cmd_request(message: Message):
+        chat_id = message.chat.id
+        username = message.from_user.username or "—"
+        full_name = message.from_user.full_name or "—"
+
+        if await auth.is_allowed(chat_id):
+            await message.answer("✅ У вас уже есть доступ. Отправьте /start")
             return
 
-        # Неавторизованный — уведомляем админа
+        # Сохраняем в БД со статусом pending (approved=False)
+        await db.add_subscriber(
+            chat_id,
+            approved=False,
+            full_name=full_name,
+            username=username,
+        )
+
         await message.answer(
-            "🔒 <b>Доступ закрыт</b>\n\n"
-            "Запрос на доступ отправлен администратору.\n"
-            "Ожидайте подтверждения.",
+            "📨 <b>Запрос отправлен!</b>\n\n"
+            "Администратор рассмотрит вашу заявку.\n"
+            "Как только доступ будет одобрен — вы получите уведомление.",
             parse_mode="HTML"
         )
 
@@ -72,10 +107,11 @@ async def main():
                     f"👤 Имя: <b>{full_name}</b>\n"
                     f"📛 Username: @{username}\n"
                     f"🆔 Chat ID: <code>{chat_id}</code>\n\n"
-                    f"Чтобы одобрить:\n"
-                    f"<code>/adduser {chat_id}</code>",
+                    f"Одобрить: <code>/adduser {chat_id}</code>\n"
+                    f"Отклонить: просто проигнорировать",
                     parse_mode="HTML"
                 )
+                logger.info(f"Access request from {chat_id} (@{username}) sent to admin")
             except Exception as e:
                 logger.warning(f"Failed to notify admin: {e}")
 
@@ -188,13 +224,40 @@ async def main():
         if not auth.is_admin(message.chat.id):
             await message.answer("🚫 Только для администратора.")
             return
-        users = await auth.get_all_users()
-        if not users:
+        rows = await db.get_all_subscribers_info()
+        if not rows:
             await message.answer("📭 Список пользователей пуст.")
             return
-        lines = [f"👥 <b>Пользователи ({len(users)})</b>\n"]
-        for uid in users:
-            lines.append(f"• <code>{uid}</code>")
+
+        approved = [r for r in rows if r["approved"]]
+        pending  = [r for r in rows if not r["approved"]]
+
+        lines = [f"👥 <b>Пользователи</b> (всего: {len(rows)})\n"]
+
+        if approved:
+            lines.append(f"✅ <b>Активные ({len(approved)})</b>")
+            for r in approved:
+                name = r["full_name"] or "—"
+                uname = f" @{r['username']}" if r["username"] else ""
+                date = r["added_at"][:10]
+                lines.append(
+                    f"  • {name}{uname}\n"
+                    f"    <code>{r['chat_id']}</code> · с {date}\n"
+                    f"    /removeuser {r['chat_id']}"
+                )
+
+        if pending:
+            lines.append(f"\n⏳ <b>Ожидают одобрения ({len(pending)})</b>")
+            for r in pending:
+                name = r["full_name"] or "—"
+                uname = f" @{r['username']}" if r["username"] else ""
+                date = r["added_at"][:10]
+                lines.append(
+                    f"  • {name}{uname}\n"
+                    f"    <code>{r['chat_id']}</code> · {date}\n"
+                    f"    /adduser {r['chat_id']}"
+                )
+
         await message.answer("\n".join(lines), parse_mode="HTML")
 
     asyncio.create_task(scanner.run_forever())

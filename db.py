@@ -3,7 +3,7 @@ Database — SQLite через aiosqlite.
 """
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 import aiosqlite
 
@@ -38,14 +38,21 @@ class Database:
                 CREATE TABLE IF NOT EXISTS subscribers (
                     chat_id     INTEGER PRIMARY KEY,
                     approved    INTEGER DEFAULT 0,
+                    full_name   TEXT    DEFAULT '',
+                    username    TEXT    DEFAULT '',
                     added_at    TEXT    NOT NULL
                 )
             """)
-            # Миграция: добавляем колонку approved если её нет (для старых БД)
-            try:
-                await db.execute("ALTER TABLE subscribers ADD COLUMN approved INTEGER DEFAULT 0")
-            except Exception:
-                pass
+            # Миграции для старых БД
+            for col, definition in [
+                ("approved",  "INTEGER DEFAULT 0"),
+                ("full_name", "TEXT DEFAULT ''"),
+                ("username",  "TEXT DEFAULT ''"),
+            ]:
+                try:
+                    await db.execute(f"ALTER TABLE subscribers ADD COLUMN {col} {definition}")
+                except Exception:
+                    pass
             await db.commit()
         logger.info("Database initialized")
 
@@ -76,9 +83,7 @@ class Database:
                 (symbol,)
             ) as cursor:
                 row = await cursor.fetchone()
-        if row:
-            return datetime.fromisoformat(row[0])
-        return None
+        return datetime.fromisoformat(row[0]) if row else None
 
     async def get_signals_count_24h(self) -> int:
         since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
@@ -104,14 +109,23 @@ class Database:
 
     # ── Subscribers / Auth ────────────────────────────────────
 
-    async def add_subscriber(self, chat_id: int, approved: bool = False):
+    async def add_subscriber(
+        self,
+        chat_id: int,
+        approved: bool = False,
+        full_name: str = "",
+        username: str = "",
+    ):
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(self.path) as db:
             await db.execute(
-                """INSERT INTO subscribers (chat_id, approved, added_at)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(chat_id) DO UPDATE SET approved=excluded.approved""",
-                (chat_id, int(approved), now)
+                """INSERT INTO subscribers (chat_id, approved, full_name, username, added_at)
+                   VALUES (?, ?, ?, ?, ?)
+                   ON CONFLICT(chat_id) DO UPDATE SET
+                       approved  = excluded.approved,
+                       full_name = CASE WHEN excluded.full_name != '' THEN excluded.full_name ELSE full_name END,
+                       username  = CASE WHEN excluded.username  != '' THEN excluded.username  ELSE username  END""",
+                (chat_id, int(approved), full_name, username, now)
             )
             await db.commit()
 
@@ -132,10 +146,22 @@ class Database:
         return bool(row and row[0])
 
     async def get_subscribers(self) -> List[int]:
-        """Возвращает только одобренных подписчиков."""
+        """Только одобренные — для рассылки алертов."""
         async with aiosqlite.connect(self.path) as db:
             async with db.execute(
                 "SELECT chat_id FROM subscribers WHERE approved = 1"
             ) as cursor:
                 rows = await cursor.fetchall()
         return [r[0] for r in rows]
+
+    async def get_all_subscribers_info(self) -> List[Dict]:
+        """Все пользователи с именами и статусом — для /users."""
+        async with aiosqlite.connect(self.path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """SELECT chat_id, approved, full_name, username, added_at
+                   FROM subscribers
+                   ORDER BY approved DESC, added_at ASC"""
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
