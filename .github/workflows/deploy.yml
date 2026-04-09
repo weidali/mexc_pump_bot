@@ -9,9 +9,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -22,28 +19,42 @@ jobs:
           script: |
             set -e
 
-            # ── 1. Клонируем репо если его ещё нет ──────────
-            if [ ! -d "${{ secrets.DEPLOY_PATH }}" ]; then
-              git clone https://github.com/${{ github.repository }} ${{ secrets.DEPLOY_PATH }}
+            DEPLOY_PATH="/var/www/u1229058/data/tmp/pump-bot"
+            REPO="https://github.com/weidali/mexc_pump_bot.git"
+            BRANCH="master"
+
+            # ── 1. Клонируем если ещё нет git репо ──────────
+            if [ ! -d "$DEPLOY_PATH/.git" ]; then
+              echo ">>> Клонируем репозиторий..."
+              rm -rf "$DEPLOY_PATH"
+              git clone -b "$BRANCH" "$REPO" "$DEPLOY_PATH"
             fi
 
-            cd ${{ secrets.DEPLOY_PATH }}
+            cd "$DEPLOY_PATH"
 
             # ── 2. Подтягиваем изменения ─────────────────────
-            git fetch origin main
-            git reset --hard origin/main
+            echo ">>> Обновляем код..."
+            git fetch origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
 
-            # ── 3. Создаём/обновляем venv и зависимости ──────
-            python3 -m venv venv
-            ./venv/bin/pip install --quiet --upgrade pip
-            ./venv/bin/pip install --quiet -r requirements.txt
+            # ── 3. Создаём venv если нет, обновляем зависимости
+            echo ">>> Обновляем зависимости..."
+            if [ ! -d "$DEPLOY_PATH/venv" ]; then
+              /usr/bin/python3.12 -m venv "$DEPLOY_PATH/venv"
+            fi
+            "$DEPLOY_PATH/venv/bin/pip" install --quiet --upgrade pip
+            "$DEPLOY_PATH/venv/bin/pip" install --quiet -r "$DEPLOY_PATH/requirements.txt"
 
             # ── 4. Пишем .env из GitHub Secrets ──────────────
-            cat > .env << 'ENVEOF'
+            echo ">>> Обновляем .env..."
+            cat > "$DEPLOY_PATH/.env" << ENVEOF
             TELEGRAM_TOKEN=${{ secrets.TELEGRAM_TOKEN }}
             MEXC_API_KEY=${{ secrets.MEXC_API_KEY }}
             MEXC_SECRET=${{ secrets.MEXC_SECRET }}
             ENVEOF
 
-            # ── 5. Перезапускаем бота (без systemd) ──────────
+            # ── 5. Перезапускаем бота ─────────────────────────
+            echo ">>> Перезапускаем бота..."
             "$DEPLOY_PATH/start.sh"
+
+            echo ">>> Деплой завершён успешно!"
