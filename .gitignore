@@ -1,0 +1,19 @@
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# База данных
+signals.db
+*.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
