@@ -1,3 +1,2 @@
-# version.py
-__version__ = "0.9.1"
-__release_notes__ = "Добавлена авторизация, inline кнопки в /users, очистка БД"
+__version__ = "1.1.0"
+__release_notes__ = "OI spike + Funding Rate детекторы, follow-up сигналы через 15 и 30 минут"

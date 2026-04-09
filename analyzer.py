@@ -35,6 +35,12 @@ class SignalResult:
 
     details: List[str] = field(default_factory=list)
 
+    # Futures confirmation (заполняется из scanner)
+    has_futures_confirm: bool = False
+    oi_change_pct: float = 0.0
+    oi_usdt: float = 0.0
+    funding_rate: Optional[float] = None
+
     def short_summary(self) -> str:
         parts = []
         if self.volume_spike:
@@ -218,3 +224,113 @@ class Analyzer:
             return True, score, cvd_norm
 
         return False, 0.0, cvd_norm
+
+
+# ─────────────────────────────────────────────────────────────
+# FuturesAnalyzer — OI и Funding Rate детекторы
+# ─────────────────────────────────────────────────────────────
+
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+
+@dataclass
+class FuturesSignal:
+    symbol: str
+
+    # OI Spike
+    oi_spike: bool = False
+    oi_change_pct: float = 0.0       # % изменения OI
+    oi_usdt: float = 0.0
+
+    # Funding Rate
+    funding_anomaly: bool = False
+    funding_rate: float = 0.0        # текущий funding rate
+
+    # Итог
+    score: float = 0.0
+    details: list = None
+
+    def __post_init__(self):
+        if self.details is None:
+            self.details = []
+
+    def short_summary(self) -> str:
+        parts = []
+        if self.oi_spike:
+            parts.append(f"OI +{self.oi_change_pct:.1f}%")
+        if self.funding_anomaly:
+            parts.append(f"FR {self.funding_rate:.4f}")
+        return " | ".join(parts) if parts else "—"
+
+
+class FuturesAnalyzer:
+    """
+    Анализирует OI и Funding Rate для подтверждения манипуляции.
+
+    OI Spike при пампе:
+      Если спотовая цена растёт + OI на фьюче резко растёт →
+      крупные открывают позиции (скорее всего шорт против толпы).
+
+    Funding Rate аномалия:
+      Если funding уходит в сильный минус при росте цены →
+      шортеры платят лонгерам, но всё равно держат шорт →
+      они уверены в развороте.
+    """
+
+    # OI вырос на X% за последние данные
+    OI_SPIKE_THRESHOLD_PCT = 15.0
+
+    # Funding rate ниже этого значения при растущей цене = аномалия
+    FUNDING_NEGATIVE_THRESHOLD = -0.0005   # -0.05%
+
+    # Очень сильный негативный funding
+    FUNDING_STRONG_THRESHOLD = -0.002      # -0.2%
+
+    WEIGHT_OI = 1.2
+    WEIGHT_FUNDING = 1.5
+
+    def analyze_futures(
+        self,
+        symbol: str,
+        current_price: float,
+        prev_price: float,
+        oi_current: Optional[float],
+        oi_prev: Optional[float],
+        funding_rate: Optional[float],
+    ) -> Optional[FuturesSignal]:
+        """
+        current_price / prev_price — цена сейчас и N минут назад
+        oi_current / oi_prev       — OI сейчас и в предыдущем цикле (из кэша)
+        funding_rate               — текущий funding rate
+        """
+        sig = FuturesSignal(symbol=symbol)
+        price_rising = current_price > prev_price * 1.02  # цена выросла хотя бы на 2%
+
+        # ── OI Spike ──────────────────────────────────────────
+        if oi_current and oi_prev and oi_prev > 0:
+            oi_change = (oi_current - oi_prev) / oi_prev * 100
+            if oi_change >= self.OI_SPIKE_THRESHOLD_PCT:
+                sig.oi_spike = True
+                sig.oi_change_pct = oi_change
+                sig.oi_usdt = oi_current
+                score = min(1.0 + (oi_change - self.OI_SPIKE_THRESHOLD_PCT) / 30, 2.0)
+                sig.score += score * self.WEIGHT_OI
+                sig.details.append(f"OI spike +{oi_change:.1f}%")
+
+        # ── Funding Rate аномалия ─────────────────────────────
+        if funding_rate is not None and price_rising:
+            if funding_rate <= self.FUNDING_STRONG_THRESHOLD:
+                sig.funding_anomaly = True
+                sig.funding_rate = funding_rate
+                sig.score += 2.0 * self.WEIGHT_FUNDING
+                sig.details.append(f"Strong negative funding {funding_rate:.4f}")
+            elif funding_rate <= self.FUNDING_NEGATIVE_THRESHOLD:
+                sig.funding_anomaly = True
+                sig.funding_rate = funding_rate
+                sig.score += 1.0 * self.WEIGHT_FUNDING
+                sig.details.append(f"Negative funding {funding_rate:.4f}")
+
+        if sig.score > 0:
+            return sig
+        return None
