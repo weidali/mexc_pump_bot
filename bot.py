@@ -38,11 +38,7 @@ async def main():
 
     # Сессия с таймаутами — решает проблему обрывов на shared хостинге
     session = AiohttpSession(
-        proxy=config.TELEGRAM_PROXY if config.TELEGRAM_PROXY else None,
-        timeout=aiohttp.ClientTimeout(
-            total=30,        # максимум 30с на запрос
-            connect=10,      # соединение за 10с
-        ),
+        timeout=aiohttp.ClientTimeout(total=30, connect=10),
     )
     bot = Bot(token=config.TELEGRAM_TOKEN, session=session)
     dp = Dispatcher()
