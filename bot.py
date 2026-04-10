@@ -36,9 +36,13 @@ async def main():
     db = Database(path=config.DB_PATH)
     await db.init()
 
-    # Сессия с таймаутами — решает проблему обрывов на shared хостинге
+    # Принудительно IPv6 — на этом хостинге IPv4 не работает для Telegram,
+    # curl подключается через IPv6 (2001:67c:4e8:f004::9) и это работает
+    import socket as _socket
+    connector = aiohttp.TCPConnector(family=_socket.AF_INET6)
     session = AiohttpSession(
         timeout=aiohttp.ClientTimeout(total=30, connect=10),
+        connector=connector,
     )
     bot = Bot(token=config.TELEGRAM_TOKEN, session=session)
     dp = Dispatcher()
