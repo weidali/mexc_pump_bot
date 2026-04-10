@@ -43,7 +43,7 @@ async def main():
     from aiogram.client.session.aiohttp import AiohttpSession as _AiohttpBase
 
     class _IPv6Session(_AiohttpBase):
-        _ipv6_session: Optional[aiohttp.ClientSession] = None
+        _ipv6_session: "aiohttp.ClientSession | None" = None
 
         async def create_session(self) -> aiohttp.ClientSession:
             # Переиспользуем одну сессию, не создаём новую каждый раз
