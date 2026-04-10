@@ -5,6 +5,8 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+import aiohttp
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 
@@ -34,7 +36,15 @@ async def main():
     db = Database(path=config.DB_PATH)
     await db.init()
 
-    bot = Bot(token=config.TELEGRAM_TOKEN)
+    # Сессия с таймаутами — решает проблему обрывов на shared хостинге
+    session = AiohttpSession(
+        proxy=config.TELEGRAM_PROXY if config.TELEGRAM_PROXY else None,
+        timeout=aiohttp.ClientTimeout(
+            total=30,        # максимум 30с на запрос
+            connect=10,      # соединение за 10с
+        ),
+    )
+    bot = Bot(token=config.TELEGRAM_TOKEN, session=session)
     dp = Dispatcher()
     auth = Auth(db=db, admin_chat_id=config.ADMIN_CHAT_ID)
     scanner = Scanner(config=config, bot=bot, db=db)
@@ -510,7 +520,11 @@ async def main():
     asyncio.create_task(btc.run_forever())
     asyncio.create_task(scheduler_loop())
     logger.info("Bot started")
-    await dp.start_polling(bot)
+    await dp.start_polling(
+        bot,
+        polling_timeout=20,      # long-poll таймаут 20с (не ждём дольше)
+        handle_signals=True,
+    )
 
 
 if __name__ == "__main__":
