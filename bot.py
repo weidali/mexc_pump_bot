@@ -25,11 +25,46 @@ from version import __version__, __release_notes__
 from btc_strategy import BTCStrategy, TradeJournal
 from scheduler import Scheduler
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
-logger = logging.getLogger(__name__)
+import os
+from logging.handlers import TimedRotatingFileHandler
+
+def setup_logging(log_dir: str = "logs") -> logging.Logger:
+    """
+    Настраивает логирование:
+    - Каждый день новый файл: logs/bot_2026-04-10.log
+    - Файлы старше 14 дней удаляются автоматически
+    - Дублирует вывод в консоль
+    """
+    os.makedirs(log_dir, exist_ok=True)
+    log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    formatter = logging.Formatter(log_format)
+
+    # Файловый хендлер с ротацией по дням
+    file_handler = TimedRotatingFileHandler(
+        filename=os.path.join(log_dir, "bot.log"),
+        when="midnight",        # новый файл каждую полночь UTC
+        interval=1,
+        backupCount=14,         # хранить 14 дней
+        encoding="utf-8",
+        utc=True,
+    )
+    file_handler.suffix = "%Y-%m-%d"   # bot.log.2026-04-10
+    file_handler.setFormatter(formatter)
+
+    # Консольный хендлер
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(file_handler)
+    root.addHandler(console_handler)
+
+    return logging.getLogger(__name__)
+
+# Логи храним рядом с БД — вне папки с кодом чтобы git reset не трогал
+_log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "pump-bot-logs")
+logger = setup_logging(log_dir=os.environ.get("LOG_DIR", _log_dir))
 
 
 async def main():

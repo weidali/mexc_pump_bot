@@ -53,10 +53,12 @@ jobs:
             MEXC_SECRET=${{ secrets.MEXC_SECRET }}
             DB_PATH=/var/www/u1229058/data/tmp/pump-bot-data/signals.db
             ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}
+            LOG_DIR=/var/www/u1229058/data/tmp/pump-bot-logs
             ENVEOF
 
-            # ── 5. Папка для данных (база, логи) — вне кода
+            # ── 5. Папки для данных (база, логи) — вне кода
             mkdir -p "/var/www/u1229058/data/tmp/pump-bot-data"
+            mkdir -p "/var/www/u1229058/data/tmp/pump-bot-logs"
 
             # ── 6. Права на скрипты
             chmod +x "$DEPLOY_PATH/start.sh" "$DEPLOY_PATH/stop.sh" "$DEPLOY_PATH/watchdog.sh"

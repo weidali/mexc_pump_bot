@@ -1,4 +1,4 @@
-__version__ = "1.6.7"
+__version__ = "1.6.8"
 __release_notes__ = "bot commands menu + /btcreset command + create_session with IPv6 connector"
 
 #__version__ = "1.5.7"

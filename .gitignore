@@ -9,7 +9,7 @@ venv/
 .venv/
 *.egg-info/
 
-# База данных
+# База данных (на сервере своя)
 signals.db
 *.db
 
@@ -17,3 +17,7 @@ signals.db
 .idea/
 .vscode/
 *.swp
+
+# Логи
+logs/
+*.log
