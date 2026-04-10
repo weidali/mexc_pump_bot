@@ -585,12 +585,22 @@ async def main():
     asyncio.create_task(scanner.run_forever())
     asyncio.create_task(btc.run_forever())
     asyncio.create_task(scheduler_loop())
+
     logger.info("Bot started")
-    await dp.start_polling(
-        bot,
-        polling_timeout=20,      # long-poll таймаут 20с (не ждём дольше)
-        handle_signals=True,
-    )
+    try:
+        await dp.start_polling(
+            bot,
+            polling_timeout=20,
+            handle_signals=True,
+        )
+    finally:
+        # Graceful shutdown — закрываем все сессии
+        logger.info("Shutting down, closing sessions...")
+        await scanner.client.close()
+        await scanner.futures_client.close()
+        await bot.session.close()
+        logger.info("Sessions closed")
+
 
 
 if __name__ == "__main__":
