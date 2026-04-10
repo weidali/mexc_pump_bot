@@ -58,7 +58,15 @@ class MEXCClient:
                         await asyncio.sleep(5)
                         continue
                     if resp.status == 400:
-                        # Не логируем — это ожидаемо для невалидных символов
+                        # Логируем только для BTC чтобы диагностировать проблему
+                        try:
+                            err_body = await resp.text()
+                        except Exception:
+                            err_body = "?"
+                        if 'BTCUSDT' in url:
+                            logger.warning(f"400 Bad Request BTCUSDT: params={params} body={err_body[:100]}")
+                        else:
+                            logger.debug(f"400 Bad Request: {url} params={params} body={err_body[:100]}")
                         return None
                     resp.raise_for_status()
                     return await resp.json()
