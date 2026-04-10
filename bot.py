@@ -88,7 +88,8 @@ async def main():
                     "📈 <b>BTC стратегия:</b>\n"
                     "/btc — статус стратегии\n"
                     "/btcstats — статистика сделок\n"
-                    "/btctrades — последние сделки",
+                    "/btctrades — последние сделки\n"
+                    "/btcreset — перезапустить стратегию",
                     parse_mode="HTML"
                 )
             else:
@@ -486,6 +487,28 @@ async def main():
     async def cmd_btcstats(message: Message):
         stats = await btc.journal.get_stats(days=30)
         await message.answer(TradeJournal.format_stats(stats), parse_mode="HTML")
+
+    @dp.message(Command("btcreset"))
+    @require_auth(auth)
+    async def cmd_btcreset(message: Message):
+        """Ручной сброс состояния BTC стратегии — если бот отвалился."""
+        old_state = btc.detector.state.value
+        btc.detector.reset_day()
+        btc.trade_mgr.active_setup = None
+        btc.trade_mgr.tp1_hit = False
+        btc.trade_mgr.breakeven_sl = None
+        btc.trade_mgr.open_time = None
+        btc._last_4h_candle_time = ""
+        btc._last_5m_candle_time = ""
+
+        await message.answer(
+            f"🔄 <b>BTC стратегия перезапущена</b>\n\n"
+            f"Было состояние: <code>{old_state}</code>\n"
+            f"Новое состояние: <code>waiting_range</code>\n\n"
+            f"Бот заново сформирует диапазон NY и начнёт искать сетапы.\n"
+            f"Проверь /status чтобы убедиться что всё OK.",
+            parse_mode="HTML"
+        )
 
     @dp.message(Command("btctrades"))
     @require_auth(auth)
