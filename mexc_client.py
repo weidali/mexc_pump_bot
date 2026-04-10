@@ -27,6 +27,8 @@ class MEXCClient:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
+            if self._session and not self._session.closed:
+                await self._session.close()
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=10),
                 headers={"X-MEXC-APIKEY": self.api_key} if self.api_key else {}

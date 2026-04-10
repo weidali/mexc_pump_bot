@@ -31,6 +31,9 @@ class MEXCFuturesClient:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
+            # Закрываем старую сессию перед созданием новой
+            if self._session and not self._session.closed:
+                await self._session.close()
             self._session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=10)
             )
