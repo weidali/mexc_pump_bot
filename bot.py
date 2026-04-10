@@ -517,10 +517,30 @@ async def main():
             f"🔄 <b>BTC стратегия перезапущена</b>\n\n"
             f"Было состояние: <code>{old_state}</code>\n"
             f"Новое состояние: <code>waiting_range</code>\n\n"
-            f"Бот заново сформирует диапазон NY и начнёт искать сетапы.\n"
-            f"Проверь /status чтобы убедиться что всё OK.",
+            f"⏳ Ищу диапазон NY...",
             parse_mode="HTML"
         )
+
+        # Принудительно ищем диапазон прямо сейчас
+        from datetime import datetime, timezone as tz
+        now = datetime.now(tz.utc)
+        today = now.strftime("%Y-%m-%d")
+        await btc._check_range_formed(now, today)
+
+        # Сообщаем результат
+        if btc.detector.ny_range:
+            rng = btc.detector.ny_range
+            await message.answer(
+                f"✅ Диапазон найден и установлен:\n"
+                f"🔼 ${rng.high:,.2f} / 🔽 ${rng.low:,.2f} / 📏 ${rng.range_size:,.2f}",
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                "⚠️ Диапазон не найден автоматически.\n"
+                "Возможно 4ч свеча ещё не закрылась — бот найдёт её сам в следующем тике.",
+                parse_mode="HTML"
+            )
 
     @dp.message(Command("btctrades"))
     @require_auth(auth)
