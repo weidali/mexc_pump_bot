@@ -5,6 +5,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.types import BotCommand, BotCommandScopeDefault, BotCommandScopeChat
 import aiohttp
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
@@ -542,6 +543,44 @@ async def main():
         while True:
             await scheduler.tick(scanner, btc)
             await asyncio.sleep(60)
+
+    # ── Устанавливаем меню команд ─────────────────────────────
+    # Команды для обычных пользователей
+    user_commands = [
+        BotCommand(command="start",      description="🤖 Главное меню"),
+        BotCommand(command="status",     description="📊 Статус сканера и BTC стратегии"),
+        BotCommand(command="top",        description="📈 Топ-20 монет по объёму"),
+        BotCommand(command="stats",      description="⚡ Сигналы за 24ч"),
+        BotCommand(command="btc",        description="📐 BTC стратегия — диапазон и сделка"),
+        BotCommand(command="btcstats",   description="📊 Статистика BTC сделок"),
+        BotCommand(command="btctrades",  description="📋 Последние сделки"),
+        BotCommand(command="btcreset",   description="🔄 Перезапустить BTC стратегию"),
+        BotCommand(command="pause",      description="⏸ Приостановить алерты"),
+        BotCommand(command="resume",     description="▶️ Возобновить алерты"),
+        BotCommand(command="version",    description="📦 Версия бота"),
+    ]
+
+    # Доп. команды для админа
+    admin_commands = user_commands + [
+        BotCommand(command="users",      description="👥 Список пользователей"),
+        BotCommand(command="adduser",    description="✅ Добавить пользователя"),
+        BotCommand(command="removeuser", description="🗑 Удалить пользователя"),
+        BotCommand(command="dbstats",    description="🗄 Статистика базы данных"),
+        BotCommand(command="dbclean",    description="🧹 Очистить старые записи"),
+    ]
+
+    # Устанавливаем команды
+    await bot.set_my_commands(user_commands, scope=BotCommandScopeDefault())
+    if config.ADMIN_CHAT_ID:
+        try:
+            await bot.set_my_commands(
+                admin_commands,
+                scope=BotCommandScopeChat(chat_id=config.ADMIN_CHAT_ID)
+            )
+        except Exception as e:
+            logger.warning(f"Failed to set admin commands: {e}")
+
+    logger.info("Bot commands menu set")
 
     asyncio.create_task(scanner.run_forever())
     asyncio.create_task(btc.run_forever())

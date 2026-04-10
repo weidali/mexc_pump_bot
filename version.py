@@ -1,5 +1,8 @@
-__version__ = "1.5.7"
-__release_notes__ = "Автопауза по расписанию UTC — сканер 07:45-21:15, BTC 04:45-21:15"
+__version__ = "1.6.0"
+__release_notes__ = "bot commands menu + /btcreset command + create_session with IPv6 connector"
+
+#__version__ = "1.5.7"
+#__release_notes__ = "Автопауза по расписанию UTC — сканер 07:45-21:15, BTC 04:45-21:15"
 
 # __version__ = "1.3.1"
 # __release_notes__ = "BTC стратегия первой 4ч свечи NY — диапазон, сетапы, SL/TP, журнал сделок"
