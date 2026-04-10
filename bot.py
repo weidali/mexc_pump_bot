@@ -64,9 +64,13 @@ async def main():
     dp = Dispatcher()
     auth = Auth(db=db, admin_chat_id=config.ADMIN_CHAT_ID)
     scanner = Scanner(config=config, bot=bot, db=db)
+    # BTC стратегия использует публичный клиент БЕЗ API ключа —
+    # MEXC блокирует BTCUSDT на длинных интервалах для авторизованных запросов
+    from mexc_client import MEXCClient as _MEXCClient
+    btc_public_client = _MEXCClient()  # без api_key и secret
     btc = BTCStrategy(
         bot=bot,
-        mexc_client=scanner.client,
+        mexc_client=btc_public_client,
         db_path=config.DB_PATH.replace("signals.db", "trades.db"),
         subscribers_fn=db.get_subscribers,
     )
