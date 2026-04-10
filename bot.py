@@ -43,11 +43,22 @@ async def main():
     from aiogram.client.session.aiohttp import AiohttpSession as _AiohttpBase
 
     class _IPv6Session(_AiohttpBase):
+        _ipv6_session: Optional[aiohttp.ClientSession] = None
+
         async def create_session(self) -> aiohttp.ClientSession:
-            return aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(family=_socket.AF_INET6),
-                timeout=aiohttp.ClientTimeout(total=30, connect=10),
-            )
+            # Переиспользуем одну сессию, не создаём новую каждый раз
+            if self._ipv6_session is None or self._ipv6_session.closed:
+                if self._ipv6_session and not self._ipv6_session.closed:
+                    await self._ipv6_session.close()
+                self._ipv6_session = aiohttp.ClientSession(
+                    connector=aiohttp.TCPConnector(family=_socket.AF_INET6),
+                    timeout=aiohttp.ClientTimeout(total=30, connect=10),
+                )
+            return self._ipv6_session
+
+        async def close(self) -> None:
+            if self._ipv6_session and not self._ipv6_session.closed:
+                await self._ipv6_session.close()
 
     bot = Bot(token=config.TELEGRAM_TOKEN, session=_IPv6Session())
     dp = Dispatcher()
