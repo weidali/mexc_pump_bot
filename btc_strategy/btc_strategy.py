@@ -99,51 +99,66 @@ class BTCStrategy:
         await self._monitor_5m(now)
 
     async def _check_range_formed(self, now: datetime, today: str):
-        """Проверяем закрылась ли первая 4ч свеча NY."""
+        """
+        Проверяем закрылась ли первая 4ч свеча NY.
+        Работает корректно при перезапуске в любое время дня.
+        """
         open_utc, close_utc = get_ny_first_4h_times(now)
 
         if now < close_utc:
-            # Свеча ещё не закрылась
+            # Свеча ещё не закрылась — ждём
             remaining = int((close_utc - now).total_seconds() / 60)
-            if remaining % 30 == 0:  # логируем раз в 30 минут
+            if remaining % 30 == 0:
                 logger.info(f"Waiting for NY 4h candle close in {remaining} min")
             return
 
-        # Свеча должна была закрыться — грузим её
-        klines_4h = await self.client.get_klines("BTCUSDT", interval="4h", limit=5)
+        # Свеча уже закрылась — грузим достаточно истории чтобы найти её
+        # limit=10 гарантирует что нужная свеча будет в списке
+        klines_4h = await self.client.get_klines("BTCUSDT", interval="4h", limit=10)
         if not klines_4h:
             return
 
-        # Ищем свечу с нужным временем открытия
+        # Ищем свечу с точным временем открытия NY сессии
         target_ts = int(open_utc.timestamp() * 1000)
         ny_candle = None
+
         for k in klines_4h:
-            if abs(int(k[0]) - target_ts) < 60_000:  # ±1 минута
+            k_ts = int(k[0])
+            if abs(k_ts - target_ts) < 5 * 60_000:  # ±5 минут
                 ny_candle = k
+                logger.info(f"Found NY candle at {datetime.utcfromtimestamp(k_ts/1000).strftime('%H:%M')} UTC")
                 break
 
         if not ny_candle:
-            # Берём предпоследнюю закрытую свечу
-            if len(klines_4h) >= 2:
-                ny_candle = klines_4h[-2]
+            # Fallback: ищем последнюю ЗАКРЫТУЮ 4ч свечу (не текущую открытую)
+            # Последняя в списке — текущая (возможно не закрытая), берём предпоследнюю
+            closed_candles = [k for k in klines_4h if int(k[0]) <= target_ts]
+            if closed_candles:
+                ny_candle = closed_candles[-1]
+                k_ts = int(ny_candle[0])
+                logger.info(
+                    f"NY candle not found by exact time, using closest: "
+                    f"{datetime.utcfromtimestamp(k_ts/1000).strftime('%H:%M')} UTC"
+                )
             else:
+                logger.warning(f"Could not find NY 4h candle, target={open_utc}")
                 return
 
         o, h, l, c = (float(ny_candle[i]) for i in (1, 2, 3, 4))
-        candle_time = datetime.utcfromtimestamp(int(ny_candle[0]) / 1000)
-        close_time  = candle_time.replace(hour=candle_time.hour + 4 if candle_time.hour < 20 else 0)
+        candle_open_dt = datetime.utcfromtimestamp(int(ny_candle[0]) / 1000)
 
         ny_range = NYRange(
             date=today,
             high=h, low=l, open=o, close=c,
             range_size=round(h - l, 2),
             range_pct=round((h - l) / l * 100, 3),
-            candle_open_utc=candle_time.strftime("%H:%M"),
-            candle_close_utc=close_utc.strftime("%H:%M"),
+            candle_open_utc=candle_open_dt.strftime("%H:%M"),
+            candle_close_utc=(candle_open_dt.replace(hour=(candle_open_dt.hour + 4) % 24)).strftime("%H:%M"),
             is_bullish=c >= o,
         )
 
         self.detector.set_range(ny_range, today)
+        logger.info(f"NY range set: {ny_range.low:.2f} — {ny_range.high:.2f}")
         await self._broadcast(ny_range.format_alert())
 
     async def _monitor_5m(self, now: datetime):
