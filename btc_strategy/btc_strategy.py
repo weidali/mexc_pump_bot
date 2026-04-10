@@ -112,58 +112,17 @@ class BTCStrategy:
                 logger.info(f"Waiting for NY 4h candle close in {remaining} min")
             return
 
-        # MEXC принимает "4h" но иногда возвращает пустой ответ —
-        # пробуем несколько вариантов интервала
-        klines_4h = None
-        for interval_try in ["4h", "60m", "1h"]:
-            result = await self.client.get_klines("BTCUSDT", interval=interval_try, limit=48)
-            if result:
-                logger.info(f"Got {len(result)} candles with interval={interval_try}")
-                klines_4h = result
-                break
-            logger.warning(f"BTCUSDT klines empty for interval={interval_try}")
-
+        # Грузим 4h свечи напрямую — публичный клиент без API ключа
+        klines_4h = await self.client.get_klines("BTCUSDT", interval="4h", limit=48)
         if not klines_4h:
-            logger.warning("BTCUSDT klines returned empty for all intervals!")
+            logger.warning("BTCUSDT 4h klines returned empty!")
             return
 
-        # Если грузили 1h свечи — агрегируем в 4h вручную
-        if len(klines_4h) > 10:
-            # Это часовые свечи, группируем по 4
-            aggregated = []
-            # Найдём свечи кратные 4 часам
-            from datetime import datetime as _dt
-            four_hour_groups = {}
-            for k in klines_4h:
-                dt = _dt.utcfromtimestamp(int(k[0])/1000)
-                # Округляем до ближайшего 4ч периода
-                four_h = dt.replace(hour=(dt.hour // 4) * 4, minute=0, second=0, microsecond=0)
-                key = int(four_h.timestamp() * 1000)
-                if key not in four_hour_groups:
-                    four_hour_groups[key] = []
-                four_hour_groups[key].append(k)
+        from datetime import datetime as _dt
+        first_dt = _dt.utcfromtimestamp(int(klines_4h[0][0])/1000).strftime("%d.%m %H:%M")
+        last_dt  = _dt.utcfromtimestamp(int(klines_4h[-1][0])/1000).strftime("%d.%m %H:%M")
+        logger.info(f"Got {len(klines_4h)} 4h candles: {first_dt} — {last_dt} UTC, target={open_utc.strftime('%H:%M')}")
 
-            for key in sorted(four_hour_groups.keys()):
-                group = four_hour_groups[key]
-                if len(group) < 4:
-                    continue  # неполная свеча
-                o = group[0][1]   # open первой
-                c = group[-1][4]  # close последней
-                h = str(max(float(g[2]) for g in group))  # max high
-                l = str(min(float(g[3]) for g in group))  # min low
-                vol = str(sum(float(g[5]) for g in group))
-                aggregated.append([key, o, h, l, c, vol])
-
-            klines_4h = aggregated
-            logger.info(f"Aggregated {len(klines_4h)} 4h candles from 1h data")
-
-        # Дебаг — показываем что вернул API
-        logger.info(f"4h klines received: {len(klines_4h)} candles")
-        for k in klines_4h:
-            from datetime import datetime as _dt
-            kt = _dt.utcfromtimestamp(int(k[0])/1000).strftime("%H:%M")
-            logger.info(f"  candle open={kt} UTC H={k[2]} L={k[3]} C={k[4]}")
-        logger.info(f"Looking for target open_utc={open_utc.strftime('%H:%M')} UTC (ts={int(open_utc.timestamp()*1000)})")
 
         # Ищем свечу с точным временем открытия NY сессии
         target_ts = int(open_utc.timestamp() * 1000)
