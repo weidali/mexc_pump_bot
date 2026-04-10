@@ -36,15 +36,16 @@ async def main():
     db = Database(path=config.DB_PATH)
     await db.init()
 
-    # Принудительно IPv6 — на этом хостинге IPv4 не работает для Telegram,
-    # curl подключается через IPv6 (2001:67c:4e8:f004::9) и это работает
+    # На reg.ru IPv4 к Telegram не работает, только IPv6.
+    # Создаём кастомную aiohttp сессию с IPv6-коннектором
+    # и передаём её в AiohttpSession через поле _session
     import socket as _socket
-    connector = aiohttp.TCPConnector(family=_socket.AF_INET6)
-    session = AiohttpSession(
+    tg_session = AiohttpSession(
         timeout=aiohttp.ClientTimeout(total=30, connect=10),
-        connector=connector,
     )
-    bot = Bot(token=config.TELEGRAM_TOKEN, session=session)
+    # Подменяем внутренний коннектор на IPv6
+    tg_session._connector = aiohttp.TCPConnector(family=_socket.AF_INET6)
+    bot = Bot(token=config.TELEGRAM_TOKEN, session=tg_session)
     dp = Dispatcher()
     auth = Auth(db=db, admin_chat_id=config.ADMIN_CHAT_ID)
     scanner = Scanner(config=config, bot=bot, db=db)
