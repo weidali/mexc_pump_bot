@@ -215,7 +215,7 @@ async def main():
         if btc_rng:
             lines.append(
                 f"  📐 Диапазон: <code>${btc_rng.low:,.2f}</code> — "
-                f"<code>${btc_rng.high:,.2f}</code> (${btc_rng.range_size:,.0f})"
+                f"<code>${btc_rng.high:,.2f}</code> (p.{btc_rng.range_size:,.0f})"
             )
         else:
             lines.append(f"  📐 Диапазон: ещё не сформирован")
@@ -633,6 +633,7 @@ async def main():
         logger.info("Shutting down, closing sessions...")
         await scanner.client.close()
         await scanner.futures_client.close()
+        await btc_public_client.close()
         await bot.session.close()
         logger.info("Sessions closed")
 
