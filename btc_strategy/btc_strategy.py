@@ -113,10 +113,18 @@ class BTCStrategy:
             return
 
         # Свеча уже закрылась — грузим достаточно истории чтобы найти её
-        # limit=10 гарантирует что нужная свеча будет в списке
         klines_4h = await self.client.get_klines("BTCUSDT", interval="4h", limit=10)
         if not klines_4h:
+            logger.warning("BTCUSDT 4h klines returned empty!")
             return
+
+        # Дебаг — показываем что вернул API
+        logger.info(f"4h klines received: {len(klines_4h)} candles")
+        for k in klines_4h:
+            from datetime import datetime as _dt
+            kt = _dt.utcfromtimestamp(int(k[0])/1000).strftime("%H:%M")
+            logger.info(f"  candle open={kt} UTC H={k[2]} L={k[3]} C={k[4]}")
+        logger.info(f"Looking for target open_utc={open_utc.strftime('%H:%M')} UTC (ts={int(open_utc.timestamp()*1000)})")
 
         # Ищем свечу с точным временем открытия NY сессии
         target_ts = int(open_utc.timestamp() * 1000)
