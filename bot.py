@@ -37,15 +37,18 @@ async def main():
     await db.init()
 
     # На reg.ru IPv4 к Telegram не работает, только IPv6.
-    # Создаём кастомную aiohttp сессию с IPv6-коннектором
-    # и передаём её в AiohttpSession через поле _session
+    # Переопределяем create_session чтобы форсировать IPv6 коннектор
     import socket as _socket
-    tg_session = AiohttpSession(
-        timeout=aiohttp.ClientTimeout(total=30, connect=10),
-    )
-    # Подменяем внутренний коннектор на IPv6
-    tg_session._connector = aiohttp.TCPConnector(family=_socket.AF_INET6)
-    bot = Bot(token=config.TELEGRAM_TOKEN, session=tg_session)
+    from aiogram.client.session.aiohttp import AiohttpSession as _AiohttpBase
+
+    class _IPv6Session(_AiohttpBase):
+        async def create_session(self) -> aiohttp.ClientSession:
+            return aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(family=_socket.AF_INET6),
+                timeout=aiohttp.ClientTimeout(total=30, connect=10),
+            )
+
+    bot = Bot(token=config.TELEGRAM_TOKEN, session=_IPv6Session())
     dp = Dispatcher()
     auth = Auth(db=db, admin_chat_id=config.ADMIN_CHAT_ID)
     scanner = Scanner(config=config, bot=bot, db=db)
