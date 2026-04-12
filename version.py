@@ -1,4 +1,4 @@
-__version__ = "1.7.0"
+__version__ = "1.7.1"
 __release_notes__ = "Risk-On/Risk-Off индикатор: SPY/TLT, VIX, DXY, Fear&Greed, BTC Dom, Funding"
 
 # __version__ = "1.6.9"

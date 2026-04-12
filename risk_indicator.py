@@ -120,7 +120,8 @@ class RiskIndicator:
         self._cache_time: Optional[datetime] = None
         self._cache_ttl_min = 30  # кэш 30 минут
 
-    async def _get_session(self) -> aiohttp.ClientSession:
+    async def _get_session(self, ipv6: bool = True) -> aiohttp.ClientSession:
+        """Возвращает сессию. ipv6=False для хостов без IPv6."""
         if self._session is None or self._session.closed:
             import socket
             self._session = aiohttp.ClientSession(
@@ -128,6 +129,14 @@ class RiskIndicator:
                 connector=aiohttp.TCPConnector(family=socket.AF_INET6),
             )
         return self._session
+
+    async def _get_default_session(self) -> aiohttp.ClientSession:
+        """Дефолтная сессия без принудительного IPv6."""
+        if not hasattr(self, '_def_session') or self._def_session.closed:
+            self._def_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=10),
+            )
+        return self._def_session
 
     async def get(self, force: bool = False) -> RiskResult:
         """Возвращает результат (из кэша или свежий)."""
@@ -285,7 +294,7 @@ class RiskIndicator:
         0 = Extreme Fear, 100 = Extreme Greed.
         """
         try:
-            session = await self._get_session()
+            session = await self._get_default_session()
             async with session.get(
                 "https://api.alternative.me/fng/?limit=1",
                 timeout=aiohttp.ClientTimeout(total=8)
@@ -314,7 +323,7 @@ class RiskIndicator:
         Падающая доминация = альт-сезон (risk-on для шиткоинов).
         """
         try:
-            session = await self._get_session()
+            session = await self._get_default_session()
             async with session.get(
                 "https://api.coingecko.com/api/v3/global",
                 timeout=aiohttp.ClientTimeout(total=8)
@@ -374,16 +383,43 @@ class RiskIndicator:
 
     # ── Yahoo Finance helper ──────────────────────────────────
 
+    _YAHOO_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://finance.yahoo.com/",
+    }
+
+    async def _yahoo_fetch(self, url: str) -> Optional[dict]:
+        """Запрос к Yahoo Finance с retry при 429."""
+        # Пробуем оба варианта URL (query1 и query2)
+        urls = [url, url.replace("query1.", "query2.")]
+        session = await self._get_default_session()
+        for u in urls:
+            for attempt in range(2):
+                try:
+                    await asyncio.sleep(attempt * 2)  # задержка при retry
+                    async with session.get(
+                        u, headers=self._YAHOO_HEADERS,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as resp:
+                        if resp.status == 429:
+                            await asyncio.sleep(3)
+                            continue
+                        if resp.status != 200:
+                            break
+                        return await resp.json()
+                except Exception as e:
+                    logger.debug(f"Yahoo {u}: {e}")
+        return None
+
     async def _yahoo_price(self, ticker: str) -> Optional[float]:
         """Текущая цена через Yahoo Finance JSON API."""
         try:
-            session = await self._get_session()
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range=1d"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            async with session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
+            data = await self._yahoo_fetch(url)
+            if not data:
+                return None
             meta = data["chart"]["result"][0]["meta"]
             return float(meta.get("regularMarketPrice") or meta.get("previousClose"))
         except Exception as e:
@@ -393,25 +429,19 @@ class RiskIndicator:
     async def _yahoo_change(self, ticker: str, days: int = 5) -> Optional[float]:
         """Изменение цены в % за N дней через Yahoo Finance."""
         try:
-            session = await self._get_session()
             url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1d&range={days+2}d"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            async with session.get(url, headers=headers) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-
+            data = await self._yahoo_fetch(url)
+            if not data:
+                return None
             closes = data["chart"]["result"][0]["indicators"]["quote"][0]["close"]
             closes = [c for c in closes if c is not None]
             if len(closes) < 2:
                 return None
-
             price_now  = closes[-1]
             price_then = closes[max(0, len(closes) - days - 1)]
             if price_then == 0:
                 return None
             return (price_now - price_then) / price_then * 100
-
         except Exception as e:
             logger.debug(f"Yahoo change {ticker}: {e}")
             return None
@@ -419,3 +449,5 @@ class RiskIndicator:
     async def close(self):
         if self._session and not self._session.closed:
             await self._session.close()
+        if hasattr(self, '_def_session') and not self._def_session.closed:
+            await self._def_session.close()
