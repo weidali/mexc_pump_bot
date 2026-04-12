@@ -1,5 +1,8 @@
-__version__ = "1.6.8"
-__release_notes__ = "bot commands menu + /btcreset command + create_session with IPv6 connector"
+__version__ = "1.7.0"
+__release_notes__ = "Risk-On/Risk-Off индикатор: SPY/TLT, VIX, DXY, Fear&Greed, BTC Dom, Funding"
+
+# __version__ = "1.6.9"
+# __release_notes__ = "bot commands menu + /btcreset command + create_session with IPv6 connector"
 
 #__version__ = "1.5.7"
 #__release_notes__ = "Автопауза по расписанию UTC — сканер 07:45-21:15, BTC 04:45-21:15"

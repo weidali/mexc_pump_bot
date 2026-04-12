@@ -24,6 +24,7 @@ from auth import Auth, require_auth
 from version import __version__, __release_notes__
 from btc_strategy import BTCStrategy, TradeJournal
 from scheduler import Scheduler
+from risk_indicator import RiskIndicator
 
 import os
 from logging.handlers import TimedRotatingFileHandler
@@ -111,6 +112,7 @@ async def main():
     )
     await btc.init()
     scheduler = Scheduler(config=config, bot=bot, get_subscribers=db.get_subscribers)
+    risk = RiskIndicator(futures_client=scanner.futures_client)
     scanner.scheduler = scheduler
 
     # ── /start — лендинг бота ────────────────────────────────
@@ -140,7 +142,9 @@ async def main():
                     "/btc — статус стратегии\n"
                     "/btcstats — статистика сделок\n"
                     "/btctrades — последние сделки\n"
-                    "/btcreset — перезапустить стратегию",
+                    "/btcreset — перезапустить стратегию\n\n"
+                    "🌡 <b>Риск-индикатор:</b>\n"
+                    "/risk — Risk-On/Risk-Off статус",
                     parse_mode="HTML"
                 )
             else:
@@ -250,7 +254,7 @@ async def main():
         if btc_rng:
             lines.append(
                 f"  📐 Диапазон: <code>${btc_rng.low:,.2f}</code> — "
-                f"<code>${btc_rng.high:,.2f}</code> (p.{btc_rng.range_size:,.0f})"
+                f"<code>${btc_rng.high:,.2f}</code> (${btc_rng.range_size:,.0f})"
             )
         else:
             lines.append(f"  📐 Диапазон: ещё не сформирован")
@@ -266,7 +270,12 @@ async def main():
         lines.append(f"  📋 Сетапов сегодня: <b>{btc_setups}</b>")
         lines.append(scheduler.get_schedule_info())
 
-        await message.answer("\n".join(lines), parse_mode="HTML")
+        # Inline кнопка для быстрого доступа к риск-индикатору
+        from aiogram.types import InlineKeyboardMarkup as _IKM, InlineKeyboardButton as _IKB
+        kb = _IKM(inline_keyboard=[[
+            _IKB(text="🌡 Risk-On/Risk-Off", callback_data="risk_status"),
+        ]])
+        await message.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
 
     # ── /top ──────────────────────────────────────────────────
     @dp.message(Command("top"))
@@ -598,6 +607,38 @@ async def main():
             )
         await message.answer("\n".join(lines), parse_mode="HTML")
 
+    # ── /risk — Risk-On/Risk-Off индикатор ───────────────────
+    @dp.message(Command("risk"))
+    @require_auth(auth)
+    async def cmd_risk(message: Message):
+        await message.answer("⏳ Считаю риск-индикатор...")
+        result = await risk.get()
+        await message.answer(result.format_message(), parse_mode="HTML")
+
+    @dp.callback_query(lambda c: c.data == "risk_status")
+    async def cb_risk_status(callback: CallbackQuery):
+        if not await auth.is_allowed(callback.from_user.id):
+            await callback.answer("🔒 Нет доступа", show_alert=True)
+            return
+        await callback.answer("⏳ Считаю...")
+        result = await risk.get()
+        await callback.message.answer(result.format_message(), parse_mode="HTML")
+
+    @dp.callback_query(lambda c: c.data == "risk_refresh")
+    async def cb_risk_refresh(callback: CallbackQuery):
+        if not await auth.is_allowed(callback.from_user.id):
+            await callback.answer("🔒 Нет доступа", show_alert=True)
+            return
+        await callback.answer("🔄 Обновляю...")
+        result = await risk.get(force=True)
+        kb = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="risk_refresh")
+        ]])
+        try:
+            await callback.message.edit_text(result.format_message(), parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            await callback.message.answer(result.format_message(), parse_mode="HTML", reply_markup=kb)
+
     # ── /version ──────────────────────────────────────────────
     @dp.message(Command("version"))
     @require_auth(auth)
@@ -628,6 +669,7 @@ async def main():
         BotCommand(command="pause",      description="⏸ Приостановить алерты"),
         BotCommand(command="resume",     description="▶️ Возобновить алерты"),
         BotCommand(command="version",    description="📦 Версия бота"),
+        BotCommand(command="risk",       description="🌡 Risk-On/Risk-Off индикатор"),
     ]
 
     # Доп. команды для админа
@@ -669,6 +711,7 @@ async def main():
         await scanner.client.close()
         await scanner.futures_client.close()
         await btc_public_client.close()
+        await risk.close()
         await bot.session.close()
         logger.info("Sessions closed")
 
