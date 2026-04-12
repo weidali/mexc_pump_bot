@@ -80,8 +80,15 @@ class BTCStrategy:
                     t = datetime.utcfromtimestamp(klines[-1][0]/1000).strftime("%H:%M")
                     event = self.trade_mgr.close_eod(close, t)
                     if event:
-                        await self.journal.save_trade(event[1].setup if hasattr(event[1], 'setup') else None)
-                        await self._broadcast(event[1])
+                        event_type, message = event
+                        await self._broadcast(message)
+                        result = self.trade_mgr.last_result
+                        if result:
+                            try:
+                                await self.journal.save_trade(result)
+                                logger.info(f"EOD trade saved: P&L={result.pnl_total:+.2f}")
+                            except Exception as e:
+                                logger.warning(f"Failed to save EOD trade: {e}")
             if self.detector.state != SetupState.SESSION_OVER:
                 self.detector.set_session_over()
                 await self._broadcast(
@@ -194,7 +201,19 @@ class BTCStrategy:
                 event_type, message = event
                 await self._broadcast(message)
                 if event_type in ("sl", "tp2", "breakeven", "eod"):
-                    # Сделка закрыта — сохраняем и продолжаем искать
+                    # Сделка закрыта — сохраняем в журнал и продолжаем искать
+                    try:
+                        # message содержит форматированный текст, result хранится в trade_mgr
+                        # Восстанавливаем TradeResult из последнего закрытого трейда
+                        result = self.trade_mgr.last_result
+                        if result:
+                            await self.journal.save_trade(result)
+                            logger.info(
+                                f"Trade saved: {result.setup.direction.upper()} "
+                                f"P&L={result.pnl_total:+.2f} status={result.status.value}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to save trade: {e}")
                     self.detector.set_watching()
                 return
 

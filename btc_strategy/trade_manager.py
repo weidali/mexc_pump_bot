@@ -50,6 +50,7 @@ class TradeManager:
         self.breakeven_sl: Optional[float] = None
         self.open_time: Optional[datetime] = None
         self.last_price: float = 0.0
+        self.last_result: Optional[TradeResult] = None
 
     @property
     def is_active(self) -> bool:
@@ -171,6 +172,7 @@ class TradeManager:
         self.tp1_hit = False
         self.breakeven_sl = None
         self.open_time = None
+        self.last_result = result
         return result
 
     # ── Форматирование уведомлений ────────────────────────────
